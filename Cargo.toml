@@ -1,0 +1,24 @@
+[package]
+name = "darwin"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.69"
+clap = {version = "4", features = ["cargo"]}
+finch = "0.6.0"
+itertools = "0.12.1"
+speedytree = "0.1.0"
+
+[profile.release]
+opt-level = 3
+debug = true
+overflow-checks = false
+lto = 'thin'
+panic = 'abort'
+incremental = false
+
+[[bin]]
+name = "darwin"
+path = "src/main.rs"
+bench = false
