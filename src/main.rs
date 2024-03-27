@@ -38,19 +38,18 @@ fn main() -> Result<()> {
     // Compute tree
     let write_to_stdin = matches.contains_id("output");
     let is_canonical = matches.get_flag("canonical");
-    let newick;
-    if is_canonical {
-        let tree = NeighborJoiningSolver::<Canonical>::default(matrix)
+    let newick: String = if is_canonical {
+        let tree = NeighborJoiningSolver::<Canonical>::default(matrix.clone())
             .solve()
             .unwrap();
-        newick = to_newick(&tree);
+        to_newick(&tree)
     } else {
-        let tree = NeighborJoiningSolver::<RapidBtrees>::default(matrix)
+        let tree = NeighborJoiningSolver::<RapidBtrees>::default(matrix.clone())
             .set_chunk_size(num_threads)
             .solve()
             .unwrap();
-        newick = to_newick(&tree);
-    }
+        to_newick(&tree)
+    };
 
     if !write_to_stdin {
         writeln!(io::stdout(), "{newick}")?;
@@ -60,11 +59,14 @@ fn main() -> Result<()> {
             .create(true)
             .append(true)
             .open(path)?;
-        file.write(newick.as_bytes())?;
+        file.write_all(newick.as_bytes())?;
     }
 
     if !matches.get_flag("keep") {
         fs::remove_dir_all("darwin_tmp")?;
+    } else {
+        // Create a PHYLIP file to store distances
+        dist::to_phylip(matrix.clone())?;
     }
 
     Ok(())

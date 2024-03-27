@@ -1,12 +1,15 @@
-use std::collections::HashMap;
 use std::path::Path;
+use std::{collections::HashMap, path::PathBuf};
 
+use anyhow::Result;
 use finch::{
     distance::distance,
     serialization::{Sketch, SketchDistance},
 };
 use itertools::Itertools;
 use speedytree::DistanceMatrix;
+use std::fs;
+use std::io::Write;
 
 // Function to compute distances
 // Adapated from finch
@@ -96,4 +99,27 @@ pub fn sketches_distance_to_matrix(distances: Vec<SketchDistance>) -> DistanceMa
         matrix,
         names: unique_names,
     }
+}
+
+pub fn to_phylip(dist: DistanceMatrix) -> Result<()> {
+    let mut path = PathBuf::new();
+    path.push("darwin_tmp");
+    path.push("distance.phylip");
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    file.write_all(format!("{}\n", dist.names.len()).as_bytes())?;
+    for i in 0..dist.names.len() {
+        file.write_all(
+            format!(
+                "{} {:.3}\n",
+                dist.names[i],
+                dist.matrix[i].iter().format(" ")
+            )
+            .as_bytes(),
+        )?;
+    }
+
+    Ok(())
 }
