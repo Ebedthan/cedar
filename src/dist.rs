@@ -71,6 +71,7 @@ pub fn sketches_distance_to_matrix(distances: Vec<SketchDistance>) -> DistanceMa
 
     // Initialise the matrix with zeros so I can do things like mat[i][j]
     let mut matrix = vec![vec![0.0; n]; n];
+
     // Hold on! Here something is happening first the SketchDistance struct
     // DOES NOT CONTAINS all pairwise distances but only non repeating
     // distances. However, the [speedytree] NJ trees functions uses

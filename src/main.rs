@@ -3,6 +3,8 @@ pub mod dist;
 pub mod sketch;
 
 use std::env;
+use std::fs;
+use std::io::{self, Write};
 
 use anyhow::Result;
 use finch::{open_sketch_file, serialization::Sketch};
@@ -34,22 +36,35 @@ fn main() -> Result<()> {
     let matrix = dist::sketches_distance_to_matrix(sketch_distance);
 
     // Compute tree
+    let write_to_stdin = matches.contains_id("output");
     let is_canonical = matches.get_flag("canonical");
+    let newick;
     if is_canonical {
         let tree = NeighborJoiningSolver::<Canonical>::default(matrix)
             .solve()
             .unwrap();
-        let newick = to_newick(&tree);
-
-        println!("{newick}");
+        newick = to_newick(&tree);
     } else {
         let tree = NeighborJoiningSolver::<RapidBtrees>::default(matrix)
             .set_chunk_size(num_threads)
             .solve()
             .unwrap();
-        let newick = to_newick(&tree);
+        newick = to_newick(&tree);
+    }
 
-        println!("{newick}");
+    if !write_to_stdin {
+        writeln!(io::stdout(), "{newick}")?;
+    } else {
+        let path = matches.get_one::<String>("output").unwrap();
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        file.write(newick.as_bytes())?;
+    }
+
+    if !matches.get_flag("keep") {
+        fs::remove_dir_all("darwin_tmp")?;
     }
 
     Ok(())

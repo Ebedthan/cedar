@@ -44,9 +44,9 @@ pub fn generate_sketch_files(matches: &ArgMatches) -> Vec<String> {
     };
 
     // Create output directory
-    if !Path::new("treetrust").exists() {
-        fs::create_dir("treetrust")
-            .map_err(|_| format_err!("Could not create directory treetrust"))
+    if !Path::new("darwin_tmp").exists() {
+        fs::create_dir("darwin_tmp")
+            .map_err(|_| format_err!("Could not create tmp dir darwin_tmp"))
             .expect("Directory creation failed");
     }
 
@@ -58,7 +58,7 @@ pub fn generate_sketch_files(matches: &ArgMatches) -> Vec<String> {
         let sketches = sketch_files(&[filename], &sketch_params, &filter_params)
             .expect("Files sketching failed");
         let mut output = PathBuf::new();
-        output.push("treetrust");
+        output.push("darwin_tmp");
         output.push(
             Path::new(filename)
                 .file_name()
@@ -71,7 +71,7 @@ pub fn generate_sketch_files(matches: &ArgMatches) -> Vec<String> {
         sketches_list.push(output.clone().into_os_string().into_string().unwrap());
         let mut out = File::create(&output)
             .map_err(|_| format_err!("Could not open {}", output.display()))
-            .expect("Create output file failed");
+            .expect("Failed to create file");
         write_mash_file(&mut out, &sketches).expect("Write mash file failed");
     }
 
