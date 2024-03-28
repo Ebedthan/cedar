@@ -11,9 +11,7 @@ use speedytree::DistanceMatrix;
 use std::fs;
 use std::io::Write;
 
-// Function to compute distances
-// Adapated from finch
-// Permalink: https://github.com/onecodex/finch-rs/blob/47850b0cf6c506ef7b3f30966504f8732a1b888f/cli/src/main.rs#L315
+/// Compute distance between sketches
 pub fn compute_distances(sketches: Vec<Sketch>) -> Vec<SketchDistance> {
     let mut distances = Vec::new();
     for skecth_combination in sketches.into_iter().combinations_with_replacement(2) {
@@ -25,14 +23,8 @@ pub fn compute_distances(sketches: Vec<Sketch>) -> Vec<SketchDistance> {
     distances
 }
 
-#[derive(Hash, Eq, PartialEq, Debug)]
-pub struct Sequence {
-    query: String,
-    reference: String,
-}
-
-/// Transform a Vec of [finch]'s SketchDistance into a [speedytree] DistanceMatrix
-pub fn sketches_distance_to_matrix(distances: Vec<SketchDistance>) -> DistanceMatrix {
+/// Computes a distance matrice from a list of sketches distances
+pub fn distance_to_matrix(distances: Vec<SketchDistance>) -> DistanceMatrix {
     // SketchDistance contains more data than needed for this task like
     // containment, jaccard distance, etc.
     // So I initialise a Vec to store only the needed data from SketchDistance
@@ -101,10 +93,11 @@ pub fn sketches_distance_to_matrix(distances: Vec<SketchDistance>) -> DistanceMa
     }
 }
 
-pub fn to_phylip(dist: DistanceMatrix) -> Result<()> {
-    let mut path = PathBuf::new();
-    path.push("darwin_tmp");
+/// Write a PHYLIP file from a distance matrice
+pub fn to_phylip(dist: DistanceMatrix, output: &str) -> Result<()> {
+    let mut path = PathBuf::from(output);
     path.push("distance.phylip");
+
     let mut file = fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -122,4 +115,85 @@ pub fn to_phylip(dist: DistanceMatrix) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+    use tempfile;
+
+    // Test compute_distances function
+    #[test]
+    fn test_compute_distances() {
+        let mut sketches = Vec::new();
+        for file in fs::read_dir("test/sketches").unwrap() {
+            sketches.push(finch::open_sketch_file(file.unwrap().path()).unwrap());
+        }
+        let distances = compute_distances(sketches.into_iter().flatten().collect_vec());
+
+        // Assert that the number of distances is correct
+        assert_eq!(distances.len(), 6);
+
+        // Assert that each distance is computed correctly
+        for distance in &distances {
+            assert!(distance.mash_distance <= 1.0);
+        }
+    }
+    // Test distance_to_matrix function
+    #[test]
+    fn test_distance_to_matrix() {
+        let mut sketches = Vec::new();
+        for file in fs::read_dir("test/sketches").unwrap() {
+            sketches.push(finch::open_sketch_file(file.unwrap().path()).unwrap());
+        }
+        let data = sketches.into_iter().flatten().collect_vec();
+
+        let distances = compute_distances(data);
+
+        let matrix = distance_to_matrix(distances);
+
+        // Assert that the matrix is computed correctly
+        assert_eq!(matrix.matrix.len(), 3);
+        assert_eq!(matrix.matrix[0].len(), 3);
+        assert_eq!(matrix.names.len(), 3);
+    }
+
+    // Test to_phylip function
+    #[test]
+    fn test_to_phylip() {
+        let dist = DistanceMatrix {
+            matrix: vec![
+                vec![0.0, 0.5, 0.8],
+                vec![0.5, 0.0, 0.9],
+                vec![0.8, 0.9, 0.0],
+            ],
+            names: vec![
+                "Sketch1".to_string(),
+                "Sketch2".to_string(),
+                "Sketch3".to_string(),
+            ],
+        };
+
+        // Create a temporary directory for testing
+        let temp_dir = tempfile::tempdir().unwrap();
+        let temp_dir_path = temp_dir.path().to_str().unwrap().to_string();
+
+        let result = to_phylip(dist.clone(), &temp_dir_path);
+        assert!(result.is_ok());
+
+        // Verify that the output file is created
+        let mut file = std::fs::File::open(format!("{}/distance.phylip", temp_dir_path)).unwrap();
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).unwrap();
+
+        // Verify the content of the output file
+        assert!(contents.contains("3"));
+        assert!(contents.contains("Sketch1 0.000 0.500 0.800"));
+        assert!(contents.contains("Sketch2 0.500 0.000 0.900"));
+        assert!(contents.contains("Sketch3 0.800 0.900 0.000"));
+
+        // Clean up the temporary directory
+        temp_dir.close().unwrap();
+    }
 }

@@ -1,32 +1,23 @@
-use std::fs::{self, File};
+use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use anyhow::format_err;
-use clap::ArgMatches;
 use finch::{
     filtering::FilterParams, serialization::write_mash_file, sketch_files,
     sketch_schemes::SketchParams,
 };
 
-pub fn generate_sketch_files(matches: &ArgMatches) -> Vec<String> {
-    // Read file names
-    let filenames = matches
-        .get_many::<String>("INPUT")
-        .unwrap_or_default()
-        .map(|v| v.as_str())
-        .collect::<Vec<_>>();
+use finch::errors::FinchResult;
 
-    // Read input parameters
-    let kmer_size: u8 = matches.get_one::<String>("kmer").unwrap().parse().unwrap();
-    let sketch_size: usize = matches.get_one::<String>("size").unwrap().parse().unwrap();
-    let oversketch: usize = matches
-        .get_one::<String>("oversketch")
-        .unwrap()
-        .parse()
-        .unwrap();
-    let seed: u64 = matches.get_one::<String>("seed").unwrap().parse().unwrap();
-
-    // Sketch parameters
+/// Create sketches from fasta/fastq files
+pub fn create_sketches(
+    filenames: Vec<&str>,
+    kmer_size: u8,
+    sketch_size: usize,
+    oversketch: usize,
+    seed: u64,
+    outdir: &str,
+) -> FinchResult<Vec<String>> {
+    // Create SketchParams struct for finch
     let sketch_params = SketchParams::Mash {
         kmers_to_sketch: sketch_size * oversketch,
         final_size: sketch_size,
@@ -35,7 +26,7 @@ pub fn generate_sketch_files(matches: &ArgMatches) -> Vec<String> {
         hash_seed: seed,
     };
 
-    // Filter parameters
+    // Create FilterParams struct for finch
     let filter_params: FilterParams = FilterParams {
         filter_on: Some(false),
         abun_filter: (Some(0u32), None),
@@ -43,23 +34,14 @@ pub fn generate_sketch_files(matches: &ArgMatches) -> Vec<String> {
         strand_filter: 0.1f64,
     };
 
-    // Create output directory
-    if !Path::new("darwin_tmp").exists() {
-        fs::create_dir("darwin_tmp")
-            .map_err(|_| format_err!("Could not create tmp dir darwin_tmp"))
-            .expect("Directory creation failed");
-    }
-
     // List of created sketch
     let mut sketches_list: Vec<String> = Vec::new();
 
     // Create directory
     for filename in filenames {
-        let sketches = sketch_files(&[filename], &sketch_params, &filter_params)
-            .expect("Files sketching failed");
-        let mut output = PathBuf::new();
-        output.push("darwin_tmp");
-        output.push(
+        let sketches = sketch_files(&[filename], &sketch_params, &filter_params)?;
+        let mut out = PathBuf::from(outdir);
+        out.push(
             Path::new(filename)
                 .file_name()
                 .unwrap()
@@ -68,12 +50,54 @@ pub fn generate_sketch_files(matches: &ArgMatches) -> Vec<String> {
                 .to_owned()
                 + ".msh",
         );
-        sketches_list.push(output.clone().into_os_string().into_string().unwrap());
-        let mut out = File::create(&output)
-            .map_err(|_| format_err!("Could not open {}", output.display()))
-            .expect("Failed to create file");
-        write_mash_file(&mut out, &sketches).expect("Write mash file failed");
+        sketches_list.push(out.clone().into_os_string().into_string().unwrap());
+        let mut out = File::create(&out)?;
+        write_mash_file(&mut out, &sketches)?;
     }
 
-    sketches_list
+    Ok(sketches_list)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_create_sketches() {
+        // Define test parameters
+        let filenames = vec!["test/GCF_000009265.fna", "test/GCA_000005845.fna.xz"];
+        let kmer_size = 21;
+        let sketch_size = 1000;
+        let oversketch = 200;
+        let seed = 42;
+        let outdir = "test_output";
+        fs::create_dir(outdir).unwrap();
+
+        // Call the function under test
+        let result = create_sketches(
+            filenames.clone(),
+            kmer_size,
+            sketch_size,
+            oversketch,
+            seed,
+            outdir,
+        );
+        // Verify that the function returned successfully
+        assert!(result.is_ok());
+
+        // Verify that the output directory and sketch files were created
+        assert!(fs::metadata(outdir).is_ok());
+        for filename in &filenames {
+            let output_filename = format!(
+                "{}/{}.msh",
+                outdir,
+                Path::new(filename).file_name().unwrap().to_str().unwrap()
+            );
+            println!("{output_filename}");
+            assert!(fs::metadata(output_filename).is_ok());
+        }
+
+        fs::remove_dir_all(outdir).unwrap();
+    }
 }
