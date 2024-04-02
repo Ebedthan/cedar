@@ -106,16 +106,24 @@ pub fn to_phylip(dist: DistanceMatrix, output: &str) -> anyhow::Result<()> {
         .create(true)
         .append(true)
         .open(path)?;
-    file.write_all(format!("{}\n", dist.names.len()).as_bytes())?;
+
+    let mut mstr = String::with_capacity(2);
+    mstr.push(char::from_digit(dist.names.len().try_into().unwrap(), 10).unwrap());
+    mstr.push('\n');
+
+    file.write_all(mstr.as_bytes())?;
+
     for i in 0..dist.names.len() {
-        file.write_all(
-            format!(
-                "{} {:.3}\n",
-                dist.names[i],
-                dist.matrix[i].iter().format(" ")
-            )
-            .as_bytes(),
-        )?;
+        // Using format! here despite performance issue to limit decimal printed
+        let val = dist.matrix[i].iter().format(" ").to_string();
+
+        let mut mstr = String::with_capacity(dist.names[i].len() + val.len() + 2);
+        mstr.push_str(&dist.names[i]);
+        mstr.push(' ');
+        mstr.push_str(&val);
+        mstr.push('\n');
+
+        file.write_all(mstr.as_bytes())?;
     }
 
     Ok(())
@@ -191,11 +199,13 @@ mod tests {
         let mut contents = String::new();
         file.read_to_string(&mut contents).unwrap();
 
-        // Verify the content of the output file
-        assert!(contents.contains("3"));
-        assert!(contents.contains("Sketch1 0.000 0.500 0.800"));
-        assert!(contents.contains("Sketch2 0.500 0.000 0.900"));
-        assert!(contents.contains("Sketch3 0.800 0.900 0.000"));
+        let expected_content = "\
+            3\n\
+            Sketch1 0 0.5 0.8\n\
+            Sketch2 0.5 0 0.9\n\
+            Sketch3 0.8 0.9 0\n\
+        ";
+        assert_eq!(contents, expected_content);
 
         // Clean up the temporary directory
         temp_dir.close().unwrap();
