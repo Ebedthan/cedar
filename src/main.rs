@@ -12,11 +12,11 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 
-use anyhow::{format_err, Result};
+use anyhow::format_err;
 use finch::{open_sketch_file, serialization::Sketch};
 use speedytree::{to_newick, Canonical, NeighborJoiningSolver, RapidBtrees};
 
-fn main() -> Result<()> {
+fn main() -> anyhow::Result<()> {
     // Read command-line arguments
     let matches = cli::build_cli().get_matches_from(env::args_os());
     let filenames = matches

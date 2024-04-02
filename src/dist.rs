@@ -6,7 +6,6 @@
 use std::path::Path;
 use std::{collections::HashMap, path::PathBuf};
 
-use anyhow::Result;
 use finch::{
     distance::distance,
     serialization::{Sketch, SketchDistance},
@@ -99,7 +98,7 @@ pub fn distance_to_matrix(distances: Vec<SketchDistance>) -> DistanceMatrix {
 }
 
 /// Write a PHYLIP file from a distance matrice
-pub fn to_phylip(dist: DistanceMatrix, output: &str) -> Result<()> {
+pub fn to_phylip(dist: DistanceMatrix, output: &str) -> anyhow::Result<()> {
     let mut path = PathBuf::from(output);
     path.push("distance.phylip");
 
