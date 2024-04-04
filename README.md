@@ -15,11 +15,14 @@ darwin outputs the tree in newick format.
 # Quick start guide
 
 ```
-# Compute neighbor-joining tree of all files in a directory
+# Compute rapid neighbor-joining tree of all files in a directory
 darwin dir/*
 
-# Compute tree using specific files
+# Compute rapid NJ tree using specific files
 darwin file1.fa.gz file2.fq.xz file3.fna.bz2
+
+# Compute canonical neighbor-joining tree
+darwin -c dir/*
 ```
 Full help is available from `darwin --help`;
 
