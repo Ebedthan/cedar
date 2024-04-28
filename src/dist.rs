@@ -71,11 +71,11 @@ pub fn distance_to_matrix(distances: Vec<SketchDistance>) -> DistanceMatrix {
     // Initialise the matrix with zeros so I can do things like mat[i][j]
     let mut matrix = vec![vec![0.0; n]; n];
 
-    // Hold on! Here something is happening first the SketchDistance struct
+    // Hold on! Here something is happening. First the SketchDistance struct
     // DOES NOT CONTAINS all pairwise distances but only non repeating
     // distances. However, the [speedytree] NJ trees functions uses
-    // a n x n matrix. So to create this matrix, I generate all the combinations
-    // using a cartesian product and then filling the matrix.
+    // a N x N matrix. So to create this matrix, I generate all the combinations
+    // using a cartesian product and then fill the matrix.
     let it = (0..n).cartesian_product(0..n);
     for (i, j) in it {
         match map.get(&(unique_names[i].clone(), unique_names[j].clone())) {
@@ -114,7 +114,7 @@ pub fn to_phylip(dist: DistanceMatrix, output: &str) -> anyhow::Result<()> {
     file.write_all(mstr.as_bytes())?;
 
     for i in 0..dist.names.len() {
-        // Using format! here despite performance issue to limit decimal printed
+        // Using format! here despite possible performance issue to limit decimal printed
         let val = dist.matrix[i].iter().format(" ").to_string();
 
         let mut mstr = String::with_capacity(dist.names[i].len() + val.len() + 2);
