@@ -58,7 +58,7 @@ fn main() -> anyhow::Result<()> {
     // 2.1. Compute matrix
     let matrix = dist::distance_to_matrix(sketch_distance);
 
-    // Step3: Compute tree
+    // Step 3: Compute tree
     // 3.1. Compute tree
     let is_canonical = matches.get_flag("canonical");
     let newick: String = utils::compute_newick_tree(&matrix, is_canonical, num_threads)?;
