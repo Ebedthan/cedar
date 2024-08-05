@@ -37,7 +37,6 @@ pub fn distance_to_matrix(distances: Vec<SketchDistance>) -> DistanceMatrix {
     for distance in distances {
         needed_data.push((distance.query, distance.reference, distance.mash_distance));
     }
-
     // Now I store the data grabed above into a HashMap to ease the distance query
     // The query and reference names can come as a path so I always extract the
     // basename to have a nice naming in the tree file
@@ -57,7 +56,6 @@ pub fn distance_to_matrix(distances: Vec<SketchDistance>) -> DistanceMatrix {
             .to_string();
         map.insert((query_basename, ref_basename), *dist);
     }
-
     // Get only the uniques names
     let mut unique_names: Vec<String> = Vec::new();
     for (query, _) in map.keys() {
@@ -65,12 +63,9 @@ pub fn distance_to_matrix(distances: Vec<SketchDistance>) -> DistanceMatrix {
             unique_names.push(query.clone());
         }
     }
-
     let n = unique_names.len();
-
     // Initialise the matrix with zeros so I can do things like mat[i][j]
     let mut matrix = vec![vec![0.0; n]; n];
-
     // Hold on! Here something is happening. First the SketchDistance struct
     // DOES NOT CONTAINS all pairwise distances but only non repeating
     // distances. However, the [speedytree] NJ trees functions uses
@@ -90,7 +85,6 @@ pub fn distance_to_matrix(distances: Vec<SketchDistance>) -> DistanceMatrix {
             }
         }
     }
-
     DistanceMatrix {
         matrix,
         names: unique_names,
