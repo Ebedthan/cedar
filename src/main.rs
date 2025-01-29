@@ -9,8 +9,7 @@ pub mod sketch;
 pub mod utils;
 
 use rayon::prelude::*;
-use std::env;
-use std::fs;
+use std::{env, fs, process};
 
 use anyhow::Context;
 use finch::serialization::Sketch;
@@ -21,25 +20,31 @@ fn main() -> anyhow::Result<()> {
     let filenames: Vec<&str> = matches
         .get_many::<String>("INPUT")
         .unwrap_or_default()
-        .map(|v| v.as_str())
+        .map(String::as_str)
         .collect();
+
+    // Ensure at least three files are provided
     if filenames.len() < 3 {
         eprintln!("Error: at least three files should be specified");
-        std::process::exit(1);
+        process::exit(1);
     }
-    let kmer_size: u8 = matches.get_one::<String>("kmer").unwrap().parse()?;
-    let sketch_size: usize = matches.get_one::<String>("size").unwrap().parse()?;
-    let oversketch: usize = matches.get_one::<String>("oversketch").unwrap().parse()?;
-    let seed: u64 = matches.get_one::<String>("seed").unwrap().parse()?;
-    let num_threads: usize = matches.get_one::<String>("threads").unwrap().parse()?;
+
+    // Parse CLI arguments
+    let kmer_size = parse_arg::<u8>(&matches, "kmer")?;
+    let sketch_size = parse_arg::<usize>(&matches, "size")?;
+    let oversketch = parse_arg::<usize>(&matches, "oversketch")?;
+    let seed = parse_arg::<u64>(&matches, "seed")?;
+    let num_threads = parse_arg::<usize>(&matches, "threads")?;
+
+    // Configure Rayon thread pool
     rayon::ThreadPoolBuilder::new()
         .num_threads(num_threads)
         .build_global()
         .unwrap();
 
-    // Manage temporary directory
+    // Create temporary directory
     let tempdir = "darwin_tmp";
-    fs::create_dir_all(tempdir).context(format!("Could not create tmpdir {}", tempdir))?;
+    fs::create_dir_all(tempdir).context(format!("Could not create temp directory: {}", tempdir))?;
 
     // Step 1: Create sketches from sequences
     // 1.1. Create sketches using CLI args and sketch::create_sketches function
@@ -76,4 +81,16 @@ fn main() -> anyhow::Result<()> {
     utils::manage_tempdir(&matches, &matrix, tempdir)?;
 
     Ok(())
+}
+
+/// Parses an argument from the CLI and converts it to the specified type
+fn parse_arg<T: std::str::FromStr>(matches: &clap::ArgMatches, key: &str) -> anyhow::Result<T>
+where
+    T::Err: std::fmt::Display,
+{
+    matches
+        .get_one::<String>(key)
+        .context(format!("Missing required argument: {}", key))?
+        .parse::<T>()
+        .map_err(|e| anyhow::anyhow!("Invalid value for {}: {}", key, e))
 }
