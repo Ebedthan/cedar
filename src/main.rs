@@ -1,4 +1,4 @@
-// Copyright 2024 Anicet Ebou.
+// Copyright 2024-2025 Anicet Ebou.
 // Licensed under the MIT license (http://opensource.org/licenses/MIT)
 // This file may not be copied, modified, or distributed except according
 // to those terms.
@@ -43,8 +43,14 @@ fn main() -> anyhow::Result<()> {
 
     // Step 1: Create sketches from sequences
     // 1.1. Create sketches using CLI args and sketch::create_sketches function
-    let sketches_path =
-        sketch::create_sketches(filenames, kmer_size, sketch_size, oversketch, seed, tempdir)?;
+    let sketches_path = sketch::create_sketches(
+        &filenames,
+        kmer_size,
+        sketch_size,
+        oversketch,
+        seed,
+        tempdir,
+    )?;
 
     // 1.2. Read created sketches files in a list
     let sketches: Vec<Sketch> = sketches_path

@@ -1,4 +1,4 @@
-// Copyright 2024 Anicet Ebou.
+// Copyright 2024-2025 Anicet Ebou.
 // Licensed under the MIT license (http://opensource.org/licenses/MIT)
 // This file may not be copied, modified, or distributed except according
 // to those terms.
@@ -7,15 +7,13 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use finch::{
-    filtering::FilterParams, serialization::write_mash_file, sketch_files,
+    errors::FinchResult, filtering::FilterParams, serialization::write_mash_file, sketch_files,
     sketch_schemes::SketchParams,
 };
 
-use finch::errors::FinchResult;
-
 /// Create sketches from fasta/fastq files
 pub fn create_sketches(
-    filenames: Vec<&str>,
+    filenames: &[&str],
     kmer_size: u8,
     sketch_size: usize,
     oversketch: usize,
@@ -32,35 +30,27 @@ pub fn create_sketches(
     };
 
     // Create FilterParams struct for finch
-    let filter_params: FilterParams = FilterParams {
+    let filter_params = FilterParams {
         filter_on: Some(false),
         abun_filter: (Some(0u32), None),
-        err_filter: 1f64,
-        strand_filter: 0.1f64,
+        err_filter: 1.0,
+        strand_filter: 0.1,
     };
 
-    // List of created sketch
-    let mut sketches_list: Vec<String> = Vec::new();
-
-    // Create directory
-    for filename in filenames {
-        let sketches = sketch_files(&[filename], &sketch_params, &filter_params)?;
-        let mut out = PathBuf::from(outdir);
-        out.push(
-            Path::new(filename)
-                .file_name()
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .to_owned()
-                + ".msh",
-        );
-        sketches_list.push(out.clone().into_os_string().into_string().unwrap());
-        let mut out = File::create(&out)?;
-        write_mash_file(&mut out, &sketches)?;
-    }
-
-    Ok(sketches_list)
+    // Process files and generate sketches
+    filenames
+        .iter()
+        .map(|filename| {
+            let sketches = sketch_files(&[*filename], &sketch_params, &filter_params)?;
+            let out_path = PathBuf::from(outdir).join(format!(
+                "{}.msh",
+                Path::new(filename).file_name().unwrap().to_string_lossy()
+            ));
+            let mut out_file = File::create(&out_path)?;
+            write_mash_file(&mut out_file, &sketches)?;
+            Ok(out_path.to_string_lossy().into_owned())
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -80,14 +70,7 @@ mod tests {
         fs::create_dir(outdir).unwrap();
 
         // Call the function under test
-        let result = create_sketches(
-            filenames.clone(),
-            kmer_size,
-            sketch_size,
-            oversketch,
-            seed,
-            outdir,
-        );
+        let result = create_sketches(&filenames, kmer_size, sketch_size, oversketch, seed, outdir);
         // Verify that the function returned successfully
         assert!(result.is_ok());
 

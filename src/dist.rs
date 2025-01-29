@@ -1,10 +1,14 @@
-// Copyright 2024 Anicet Ebou.
+// Copyright 2024-2025 Anicet Ebou.
 // Licensed under the MIT license (http://opensource.org/licenses/MIT)
 // This file may not be copied, modified, or distributed except according
 // to those terms.
 
-use std::path::Path;
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::HashMap,
+    fs::{self},
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use finch::{
     distance::distance,
@@ -12,19 +16,17 @@ use finch::{
 };
 use itertools::Itertools;
 use speedytree::DistanceMatrix;
-use std::fs;
-use std::io::Write;
 
 /// Compute distance between sketches
 pub fn compute_distances(sketches: Vec<Sketch>) -> Vec<SketchDistance> {
-    let mut distances = Vec::new();
-    for skecth_combination in sketches.into_iter().combinations_with_replacement(2) {
-        let distance = distance(&skecth_combination[0], &skecth_combination[1], false).unwrap();
-        if distance.mash_distance <= 1f64 {
-            distances.push(distance);
-        }
-    }
-    distances
+    sketches
+        .into_iter()
+        .combinations_with_replacement(2)
+        .filter_map(|pair| {
+            let dist = distance(&pair[0], &pair[1], false).ok()?;
+            (dist.mash_distance <= 1.0).then_some(dist)
+        })
+        .collect()
 }
 
 /// Computes a distance matrice from a list of sketches distances
@@ -33,58 +35,42 @@ pub fn distance_to_matrix(distances: Vec<SketchDistance>) -> DistanceMatrix {
     // containment, jaccard distance, etc.
     // So I initialise a Vec to store only the needed data from SketchDistance
     // needed data: query name, reference name, mash distance
-    let mut needed_data: Vec<(String, String, f64)> = Vec::new();
-    for distance in distances {
-        needed_data.push((distance.query, distance.reference, distance.mash_distance));
-    }
-    // Now I store the data grabed above into a HashMap to ease the distance query
-    // The query and reference names can come as a path so I always extract the
-    // basename to have a nice naming in the tree file
     let mut map: HashMap<(String, String), f64> = HashMap::new();
-    for (query, reference, dist) in needed_data.iter() {
-        let query_basename = Path::new(&query)
+
+    for distance in distances {
+        let query_basename = Path::new(&distance.query)
             .file_stem()
-            .unwrap()
-            .to_str()
-            .unwrap()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
             .to_string();
-        let ref_basename = Path::new(&reference)
+        let ref_basename = Path::new(&distance.reference)
             .file_stem()
-            .unwrap()
-            .to_str()
-            .unwrap()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
             .to_string();
-        map.insert((query_basename, ref_basename), *dist);
+        map.insert((query_basename, ref_basename), distance.mash_distance);
     }
-    // Get only the uniques names
-    let mut unique_names: Vec<String> = Vec::new();
-    for (query, _) in map.keys() {
-        if !unique_names.contains(query) {
-            unique_names.push(query.clone());
-        }
-    }
+
+    // Collect unique names
+    let unique_names: Vec<String> = map.keys().map(|(q, _)| q.clone()).unique().collect();
     let n = unique_names.len();
-    // Initialise the matrix with zeros so I can do things like mat[i][j]
+
+    // Initialize N x N matrix with zeros
     let mut matrix = vec![vec![0.0; n]; n];
+
+    // Fill the matrix using precomputed distances
     // Hold on! Here something is happening. First the SketchDistance struct
     // DOES NOT CONTAINS all pairwise distances but only non repeating
     // distances. However, the [speedytree] NJ trees functions uses
     // a N x N matrix. So to create this matrix, I generate all the combinations
     // using a cartesian product and then fill the matrix.
-    let it = (0..n).cartesian_product(0..n);
-    for (i, j) in it {
-        match map.get(&(unique_names[i].clone(), unique_names[j].clone())) {
-            Some(&dist) => {
-                matrix[i][j] = dist;
-            }
-            None => {
-                let dist = map
-                    .get(&(unique_names[j].clone(), unique_names[i].clone()))
-                    .unwrap();
-                matrix[i][j] = *dist;
-            }
-        }
+    for (i, j) in (0..n).cartesian_product(0..n) {
+        matrix[i][j] = *map
+            .get(&(unique_names[i].clone(), unique_names[j].clone()))
+            .or_else(|| map.get(&(unique_names[j].clone(), unique_names[i].clone())))
+            .unwrap_or(&0.0);
     }
+
     DistanceMatrix {
         matrix,
         names: unique_names,
@@ -93,31 +79,15 @@ pub fn distance_to_matrix(distances: Vec<SketchDistance>) -> DistanceMatrix {
 
 /// Write a PHYLIP file from a distance matrice
 pub fn to_phylip(dist: DistanceMatrix, output: &str) -> anyhow::Result<()> {
-    let mut path = PathBuf::from(output);
-    path.push("distance.phylip");
-
     let mut file = fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(path)?;
+        .open(PathBuf::from(output).join("distance.phylip"))?;
 
-    let mut mstr = String::with_capacity(2);
-    mstr.push(char::from_digit(dist.names.len().try_into().unwrap(), 10).unwrap());
-    mstr.push('\n');
+    writeln!(file, "{}", dist.names.len())?;
 
-    file.write_all(mstr.as_bytes())?;
-
-    for i in 0..dist.names.len() {
-        // Using format! here despite possible performance issue to limit decimal printed
-        let val = dist.matrix[i].iter().format(" ").to_string();
-
-        let mut mstr = String::with_capacity(dist.names[i].len() + val.len() + 2);
-        mstr.push_str(&dist.names[i]);
-        mstr.push(' ');
-        mstr.push_str(&val);
-        mstr.push('\n');
-
-        file.write_all(mstr.as_bytes())?;
+    for (name, row) in dist.names.iter().zip(&dist.matrix) {
+        writeln!(file, "{} {}", name, row.iter().format(" "))?;
     }
 
     Ok(())
