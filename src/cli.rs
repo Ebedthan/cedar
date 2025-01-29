@@ -8,73 +8,77 @@ use clap::{crate_authors, crate_version, Arg, ArgAction, Command};
 pub fn build_cli() -> Command {
     Command::new("darwin")
         .about("darwin - compute (rapid) neighbor joining tree from sequences")
-        .arg_required_else_help(true)
         .author(crate_authors!())
         .version(crate_version!())
-        .arg(
+        .arg_required_else_help(true)
+        .args([
             Arg::new("INPUT")
-                .help("the file(s) to build trees [can be .gz, .xz, .bz2]")
+                .help("The file(s) to build trees [supports .gz, .xz, .bz2]")
                 .num_args(1..)
                 .required(true),
-        )
-        .arg(
             Arg::new("output")
                 .short('o')
+                .long("output")
                 .value_name("FILE")
-                .help("output tree (newick format) to FILE"),
-        )
-        .arg(
+                .help("Output tree (Newick format) to FILE"),
             Arg::new("keep")
                 .short('K')
-                .help("keep sketches and distances files")
+                .long("keep")
+                .help("Keep sketches and distance files")
                 .action(ArgAction::SetTrue),
-        )
-        .arg(
             Arg::new("threads")
                 .short('t')
+                .long("threads")
                 .value_name("INT")
-                .help("number of threads")
-                .default_value("1"),
-        )
-        .arg(
-            Arg::new("size")
-                .short('s')
-                .value_name("INT")
-                .help("sketch size")
-                .default_value("1000")
-                .help_heading("Sketching options"),
-        )
-        .arg(
-            Arg::new("seed")
-                .short('S')
-                .value_name("INT")
-                .help("seed to provide to the hash function")
-                .default_value("42")
-                .help_heading("Sketching options"),
-        )
-        .arg(
-            Arg::new("kmer")
-                .short('k')
-                .value_name("INT")
-                .default_value("21")
-                .help("k-mer size")
-                .help_heading("Sketching options"),
-        )
-        .arg(
-            Arg::new("oversketch")
-                .short('x')
-                .value_name("INT")
-                .help("amount of extra sketching to do before filtering")
-                .default_value("200")
-                .help_heading("Sketching options"),
-        )
-        .arg(
-            Arg::new("canonical")
-                .short('c')
-                .action(ArgAction::SetTrue)
-                .help("compute canonical NJ tree")
-                .help_heading("Tree options"),
-        )
+                .default_value("1")
+                .help("Number of threads to use"),
+        ])
+        .args(build_sketching_args())
+        .args(build_tree_args())
+}
+
+/// Helper function to create sketching-related arguments
+fn build_sketching_args() -> [Arg; 4] {
+    [
+        Arg::new("size")
+            .short('s')
+            .long("size")
+            .value_name("INT")
+            .default_value("1000")
+            .help("Sketch size")
+            .help_heading("Sketching options"),
+        Arg::new("seed")
+            .short('S')
+            .long("seed")
+            .value_name("INT")
+            .default_value("42")
+            .help("Seed for the hash function")
+            .help_heading("Sketching options"),
+        Arg::new("kmer")
+            .short('k')
+            .long("kmer")
+            .value_name("INT")
+            .default_value("21")
+            .help("K-mer size")
+            .help_heading("Sketching options"),
+        Arg::new("oversketch")
+            .short('x')
+            .long("oversketch")
+            .value_name("INT")
+            .default_value("200")
+            .help("Amount of extra sketching before filtering")
+            .help_heading("Sketching options"),
+    ]
+}
+
+/// Helper function to create tree-related arguments
+fn build_tree_args() -> [Arg; 1] {
+    [Arg::new("canonical")
+        .short('c')
+        .long("canonical")
+        .help("Compute canonical NJ tree")
+        .action(ArgAction::SetTrue)
+        .help_heading("Tree options")]
 }
 
 #[cfg(test)]
