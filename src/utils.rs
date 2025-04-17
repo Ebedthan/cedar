@@ -23,8 +23,8 @@ pub fn compute_newick_tree(
     }
 }
 
-pub fn output_tree(matches: &clap::ArgMatches, newick: String) -> anyhow::Result<()> {
-    match matches.get_one::<String>("output") {
+pub fn output_tree(output: Option<String>, newick: String) -> anyhow::Result<()> {
+    match output {
         Some(path) => {
             let mut file = fs::File::create(path)?;
             file.write_all(newick.as_bytes())?;
@@ -37,11 +37,11 @@ pub fn output_tree(matches: &clap::ArgMatches, newick: String) -> anyhow::Result
 }
 
 pub fn manage_tempdir(
-    matches: &clap::ArgMatches,
+    keep: bool,
     matrix: &speedytree::DistanceMatrix,
     tempdir: &str,
 ) -> anyhow::Result<()> {
-    if matches.get_flag("keep") {
+    if keep {
         dist::to_phylip(matrix.clone(), tempdir)
     } else {
         fs::remove_dir_all(tempdir)?;
