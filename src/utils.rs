@@ -69,6 +69,24 @@ pub fn is_fasta_format(path: &str) -> bool {
     false
 }
 
+pub fn is_multi_fasta(path: &str) -> bool {
+    let file = File::open(path).expect("file should be available");
+    let reader = BufReader::new(file);
+
+    let mut header_count = 0;
+
+    for line in reader.lines() {
+        let line = line.expect("line should be parseable");
+        if line.trim_start().starts_with('>') {
+            header_count += 1;
+            if header_count > 1 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

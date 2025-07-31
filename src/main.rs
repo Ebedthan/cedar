@@ -26,6 +26,12 @@ fn main() -> anyhow::Result<()> {
         process::exit(1);
     }
 
+    // Check if all files are only single-sequence fasta
+    if filenames.iter().any(|f| utils::is_multi_fasta(f)) {
+        eprintln!("Error: only single-sequence fasta files are allowed");
+        process::exit(1);
+    }
+
     // Ensure at least three files are provided
     if filenames.len() < 3 {
         eprintln!("Error: at least three files should be specified");
