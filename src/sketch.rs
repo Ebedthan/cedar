@@ -11,7 +11,18 @@ use finch::{
     sketch_schemes::SketchParams,
 };
 
-/// Create sketches from fasta/fastq files
+/// Compute the value of k that minimizes the probability of
+/// observing a random k-mer.
+///
+/// s: genome size
+/// p: desired probabilty
+/// Based on Fofanov et al., 2004, 10.1093/bioinformatics/bth266
+pub fn k_computing(s: u64, p: f64) -> u32 {
+    let x: f64 = s as f64 * (1.0f64 - p) / p;
+    (x.log10() / 4.0f64.log10()).ceil() as u32
+}
+
+/// Create sketches from fasta files
 pub fn create_sketches(
     filenames: &[&str],
     kmer_size: u8,
