@@ -8,13 +8,13 @@ use clap::Parser;
 #[derive(Parser, Debug)]
 #[command(
     name = "darwin",
-    about = "compute (rapid) neighbor joining tree from sequences",
+    about = "Compute (rapid) neighbor joining tree from sequences",
     author,
     version,
     arg_required_else_help = true
 )]
 pub struct Cli {
-    /// The file(s) to build trees [suports .gz, .xz, .bz2]
+    /// Fasta file(s) to build trees [suports .gz, .xz, .bz2]
     #[arg(required = true)]
     pub input: Vec<String>,
 

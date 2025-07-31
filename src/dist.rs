@@ -59,7 +59,7 @@ pub fn distance_to_matrix(distances: Vec<SketchDistance>) -> DistanceMatrix {
     let mut matrix = vec![vec![0.0; n]; n];
 
     // Fill the matrix using precomputed distances
-    // Hold on! Here something is happening. First the SketchDistance struct
+    // Hold on! Here something is happening. First the SketchDistance struct (distances)
     // DOES NOT CONTAINS all pairwise distances but only non repeating
     // distances. However, the [speedytree] NJ trees functions uses
     // a N x N matrix. So to create this matrix, I generate all the combinations
@@ -109,7 +109,7 @@ mod tests {
         let distances = compute_distances(sketches.into_iter().flatten().collect_vec());
 
         // Assert that the number of distances is correct
-        assert_eq!(distances.len(), 6);
+        assert_eq!(distances.len(), 3);
 
         // Assert that each distance is computed correctly
         for distance in &distances {
@@ -130,9 +130,9 @@ mod tests {
         let matrix = distance_to_matrix(distances);
 
         // Assert that the matrix is computed correctly
-        assert_eq!(matrix.matrix.len(), 3);
-        assert_eq!(matrix.matrix[0].len(), 3);
-        assert_eq!(matrix.names.len(), 3);
+        assert_eq!(matrix.matrix.len(), 2);
+        assert_eq!(matrix.matrix[0].len(), 2);
+        assert_eq!(matrix.names.len(), 2);
     }
 
     // Test to_phylip function

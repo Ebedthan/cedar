@@ -61,7 +61,7 @@ mod tests {
     #[test]
     fn test_create_sketches() {
         // Define test parameters
-        let filenames = vec!["test/GCF_000009265.fna", "test/GCA_000005845.fna.xz"];
+        let filenames = vec!["test/bacam.fna", "test/bacsp.fna"];
         let kmer_size = 21;
         let sketch_size = 1000;
         let oversketch = 200;

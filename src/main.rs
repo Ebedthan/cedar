@@ -20,6 +20,12 @@ fn main() -> anyhow::Result<()> {
     let cli = cli::Cli::parse();
     let filenames: Vec<&str> = cli.input.iter().map(String::as_str).collect();
 
+    // Ensure all provided files are in fasta format
+    if filenames.iter().any(|f| !utils::is_fasta_format(f)) {
+        eprintln!("Error: only fasta files are allowed");
+        process::exit(1);
+    }
+
     // Ensure at least three files are provided
     if filenames.len() < 3 {
         eprintln!("Error: at least three files should be specified");

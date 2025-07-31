@@ -1,5 +1,7 @@
 use crate::dist;
-use std::fs;
+use std::fs::{self, File};
+use std::io::BufRead;
+use std::io::BufReader;
 use std::io::{self, Write};
 
 pub fn compute_newick_tree(
@@ -46,5 +48,38 @@ pub fn manage_tempdir(
     } else {
         fs::remove_dir_all(tempdir)?;
         Ok(())
+    }
+}
+
+pub fn is_fasta_format(path: &str) -> bool {
+    let file = File::open(path).expect("file should exists before opening.");
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
+
+    while let Some(Ok(line)) = lines.next() {
+        let trimmed_line = line.trim();
+        if trimmed_line.is_empty() {
+            continue;
+        }
+        return match trimmed_line.chars().next() {
+            Some('>') => true,
+            _ => false,
+        };
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_fasta_format_ok() {
+        assert!(is_fasta_format("test/bac168.fna"));
+    }
+
+    #[test]
+    fn test_is_fasta_format_not_ok() {
+        assert!(!is_fasta_format("test/test.fq"));
     }
 }
