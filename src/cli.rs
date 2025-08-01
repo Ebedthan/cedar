@@ -54,11 +54,10 @@ pub struct Cli {
     #[arg(
         short = 'k',
         long,
-        default_value_t = 21,
         value_name = "INT",
         help_heading = "Sketching options"
     )]
-    pub kmer: u8,
+    pub kmer: Option<u8>,
 
     /// Amount of extra scketching before filtering
     #[arg(

@@ -50,16 +50,30 @@ fn main() -> anyhow::Result<()> {
             utils::format_genome_size(stat.1)
         );
     }
-    let outliers = utils::detect_outliers(stats, 0.01)?;
+    let outliers = utils::detect_outliers(&stats, 0.05)?;
     if !outliers.is_empty() {
         eprintln!("Error: outliers detected in genome sizes");
         for outlier in outliers {
             eprintln!(
-                "       Genome {} with size {} negatively influence k selection",
-                outlier.0, outlier.1
+                "Genome {} with size {} negatively influence k selection with influential size",
+                outlier.0,
+                utils::format_genome_size(outlier.1)
             );
         }
         process::exit(1);
+    }
+    let mut kmer_size = 0_u8;
+    if let Some(km) = cli.kmer {
+        println!("User-defined k-mer size: {}", km);
+    } else {
+        let mean_genome_size = &stats.iter().map(|x| x.1 as u32).sum::<u32>() / stats.len() as u32;
+        kmer_size = sketch::k_computing(mean_genome_size, 0.01);
+        println!(
+            "Computed k-mer size (with mean genome size: {} and probability: {}): {}",
+            utils::format_genome_size(mean_genome_size as usize),
+            0.01,
+            kmer_size
+        );
     }
 
     // Configure Rayon thread pool
@@ -76,7 +90,7 @@ fn main() -> anyhow::Result<()> {
     // 1.1. Create sketches using CLI args and sketch::create_sketches function
     let sketches_path = sketch::create_sketches(
         &filenames,
-        cli.kmer,
+        kmer_size,
         cli.size,
         cli.oversketch,
         cli.seed,

@@ -134,7 +134,7 @@ pub fn format_genome_size(size: usize) -> String {
 }
 
 pub fn detect_outliers(
-    data: Vec<(String, usize)>,
+    data: &Vec<(String, usize)>,
     epsilon: f64,
 ) -> anyhow::Result<Vec<(String, usize)>> {
     let mut outliers = Vec::new();
@@ -145,7 +145,7 @@ pub fn detect_outliers(
         let mean = sum / values.len() as f64;
         let mut max_impact = 0.0;
         let mut influential_genome = (String::new(), 0_usize);
-        for x in &data {
+        for x in data {
             let leave_one_sum = sum - x.1 as f64;
             let leave_one_mean = leave_one_sum / (values.len() as f64 - 1.0);
             let impact = (mean - leave_one_mean).abs();

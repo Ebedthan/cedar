@@ -17,9 +17,9 @@ use finch::{
 /// s: genome size
 /// p: desired probabilty
 /// Based on Fofanov et al., 2004, 10.1093/bioinformatics/bth266
-pub fn k_computing(s: u64, p: f64) -> u32 {
+pub fn k_computing(s: u32, p: f64) -> u8 {
     let x: f64 = s as f64 * (1.0f64 - p) / p;
-    (x.log10() / 4.0f64.log10()).ceil() as u32
+    (x.log10() / 4.0f64.log10()).ceil() as u8
 }
 
 /// Create sketches from fasta files
