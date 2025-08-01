@@ -54,6 +54,7 @@ pub struct Cli {
     #[arg(
         short = 'k',
         long,
+        default_value_t = 21,
         value_name = "INT",
         help_heading = "Sketching options"
     )]

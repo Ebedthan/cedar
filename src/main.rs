@@ -38,6 +38,30 @@ fn main() -> anyhow::Result<()> {
         process::exit(1);
     }
 
+    let stats: Vec<(String, usize)> = filenames
+        .iter()
+        .map(|f| utils::get_seq_stats(f).unwrap())
+        .collect();
+
+    for stat in &stats {
+        println!(
+            "Genome: {}, size: {}",
+            stat.0,
+            utils::format_genome_size(stat.1)
+        );
+    }
+    let outliers = utils::detect_outliers(stats, 0.01)?;
+    if !outliers.is_empty() {
+        eprintln!("Error: outliers detected in genome sizes");
+        for outlier in outliers {
+            eprintln!(
+                "       Genome {} with size {} negatively influence k selection",
+                outlier.0, outlier.1
+            );
+        }
+        process::exit(1);
+    }
+
     // Configure Rayon thread pool
     rayon::ThreadPoolBuilder::new()
         .num_threads(cli.threads)
@@ -64,6 +88,8 @@ fn main() -> anyhow::Result<()> {
         .into_par_iter()
         .flat_map(|path| finch::open_sketch_file(path).unwrap())
         .collect();
+
+    //println!("{:?}", sketches[0].hashes);
 
     // Step 2: Compute distance between sketches
     let sketch_distance = dist::compute_distances(sketches);
