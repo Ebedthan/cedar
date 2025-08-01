@@ -166,6 +166,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "26a5c3fd7bfa1ce3897a3a3501d362b2d87b7f2583ebcb4a949ec25911025cbc"
 
 [[package]]
+name = "cedar"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "finch",
+ "itertools",
+ "rayon",
+ "speedytree",
+ "tempfile",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -250,19 +263,6 @@ name = "crossbeam-utils"
 version = "0.8.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22ec99545bb0ed0ea7bb9b8e1e9122ea386ff8a48c0922e43f36d45ab09e0e80"
-
-[[package]]
-name = "darwin"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "finch",
- "itertools",
- "rayon",
- "speedytree",
- "tempfile",
-]
 
 [[package]]
 name = "dtoa"
