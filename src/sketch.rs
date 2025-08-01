@@ -24,7 +24,7 @@ pub fn k_computing(s: u32, p: f64) -> u8 {
 
 /// Create sketches from fasta files
 pub fn create_sketches(
-    filenames: &[&str],
+    filenames: &[String],
     kmer_size: u8,
     sketch_size: usize,
     oversketch: usize,
@@ -52,7 +52,7 @@ pub fn create_sketches(
     filenames
         .iter()
         .map(|filename| {
-            let sketches = sketch_files(&[*filename], &sketch_params, &filter_params)?;
+            let sketches = sketch_files(&[filename], &sketch_params, &filter_params)?;
             let out_path = PathBuf::from(outdir).join(format!(
                 "{}.msh",
                 Path::new(filename).file_name().unwrap().to_string_lossy()
@@ -72,7 +72,7 @@ mod tests {
     #[test]
     fn test_create_sketches() {
         // Define test parameters
-        let filenames = vec!["test/bacam.fna", "test/bacsp.fna"];
+        let filenames = ["test/bacam.fna".to_string(), "test/bacsp.fna".to_string()];
         let kmer_size = 21;
         let sketch_size = 1000;
         let oversketch = 200;

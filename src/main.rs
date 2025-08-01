@@ -18,7 +18,7 @@ use finch::serialization::Sketch;
 fn main() -> anyhow::Result<()> {
     // Read command-line arguments
     let cli = cli::Cli::parse();
-    let filenames: Vec<&str> = cli.input.iter().map(String::as_str).collect();
+    let filenames = cli.input.as_slice();
 
     // Validate inputs
     if let Err(e) = utils::validate_inputs(&cli.input) {
@@ -28,8 +28,8 @@ fn main() -> anyhow::Result<()> {
 
     let stats: Vec<(String, usize)> = filenames
         .iter()
-        .map(|f| utils::get_seq_stats(f).unwrap())
-        .collect();
+        .map(|f| utils::get_seq_stats(f))
+        .collect::<anyhow::Result<_>>()?;
 
     for stat in &stats {
         println!(
@@ -77,7 +77,7 @@ fn main() -> anyhow::Result<()> {
     // Step 1: Create sketches from sequences
     // 1.1. Create sketches using CLI args and sketch::create_sketches function
     let sketches_path = sketch::create_sketches(
-        &filenames,
+        filenames,
         kmer_size,
         cli.size,
         cli.oversketch,
