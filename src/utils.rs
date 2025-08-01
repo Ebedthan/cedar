@@ -181,6 +181,39 @@ pub fn detect_outliers(
     Ok(outliers)
 }
 
+pub fn validate_inputs(filenames: &[String]) -> anyhow::Result<()> {
+    if filenames.len() < 3 {
+        anyhow::bail!("At least three input FASTA files must be provided.");
+    }
+
+    let mut invalid = vec![];
+    let mut multi_seq = vec![];
+
+    for file in filenames {
+        if !is_fasta_format(file) {
+            invalid.push(file.clone());
+        } else if is_multi_fasta(file) {
+            multi_seq.push(file.clone());
+        }
+    }
+
+    if !invalid.is_empty() {
+        anyhow::bail!(
+            "Only FASTA files are allowed. Invalid files: {}",
+            invalid.join(", ")
+        );
+    }
+
+    if !multi_seq.is_empty() {
+        anyhow::bail!(
+            "Only single-sequence FASTA files are allowed. Multi-sequence files: {}",
+            multi_seq.join(", ")
+        );
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -20,21 +20,9 @@ fn main() -> anyhow::Result<()> {
     let cli = cli::Cli::parse();
     let filenames: Vec<&str> = cli.input.iter().map(String::as_str).collect();
 
-    // Ensure all provided files are in fasta format
-    if filenames.iter().any(|f| !utils::is_fasta_format(f)) {
-        eprintln!("Error: only fasta files are allowed");
-        process::exit(1);
-    }
-
-    // Check if all files are only single-sequence fasta
-    if filenames.iter().any(|f| utils::is_multi_fasta(f)) {
-        eprintln!("Error: only single-sequence fasta files are allowed");
-        process::exit(1);
-    }
-
-    // Ensure at least three files are provided
-    if filenames.len() < 3 {
-        eprintln!("Error: at least three files should be specified");
+    // Validate inputs
+    if let Err(e) = utils::validate_inputs(&cli.input) {
+        eprintln!("Input validation error: {e}");
         process::exit(1);
     }
 
@@ -102,8 +90,6 @@ fn main() -> anyhow::Result<()> {
         .into_par_iter()
         .flat_map(|path| finch::open_sketch_file(path).unwrap())
         .collect();
-
-    //println!("{:?}", sketches[0].hashes);
 
     // Step 2: Compute distance between sketches
     let sketch_distance = dist::compute_distances(sketches);
