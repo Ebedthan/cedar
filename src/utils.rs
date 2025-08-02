@@ -1,8 +1,21 @@
 use crate::dist;
+use rayon::ThreadPoolBuilder;
 use std::fs::{self, File};
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::{self, Write};
+use std::sync::Once;
+
+static INIT_RAYON: Once = Once::new();
+
+pub fn init_rayon_pool(threads: usize) {
+    INIT_RAYON.call_once(|| {
+        ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build_global()
+            .expect("Failed to initialize Rayon global thread pool");
+    });
+}
 
 pub fn compute_newick_tree(
     matrix: &speedytree::DistanceMatrix,

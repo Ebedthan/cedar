@@ -3,10 +3,12 @@
 // This file may not be copied, modified, or distributed except according
 // to those terms.
 
+pub mod bootstrap;
 pub mod cli;
 pub mod dist;
 pub mod sketch;
 pub mod utils;
+
 use clap::Parser;
 
 use rayon::prelude::*;
@@ -15,9 +17,14 @@ use std::{fs, process};
 use anyhow::Context;
 use finch::serialization::Sketch;
 
+use crate::utils::init_rayon_pool;
+
 fn main() -> anyhow::Result<()> {
     // Read command-line arguments
     let cli = cli::Cli::parse();
+
+    init_rayon_pool(cli.threads);
+
     let filenames = cli.input.as_slice();
 
     // Validate inputs
@@ -64,15 +71,9 @@ fn main() -> anyhow::Result<()> {
         );
     }
 
-    // Configure Rayon thread pool
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(cli.threads)
-        .build_global()
-        .unwrap();
-
     // Create temporary directory
-    let tempdir = "darwin_tmp";
-    fs::create_dir_all(tempdir).context(format!("Could not create temp directory: {}", tempdir))?;
+    fs::create_dir_all(&cli.tempdir)
+        .context(format!("Could not create temp directory: {}", &cli.tempdir))?;
 
     // Step 1: Create sketches from sequences
     // 1.1. Create sketches using CLI args and sketch::create_sketches function
@@ -82,7 +83,7 @@ fn main() -> anyhow::Result<()> {
         cli.size,
         cli.oversketch,
         cli.seed,
-        tempdir,
+        &cli.tempdir,
     )?;
 
     // 1.2. Read created sketches files in a list
@@ -105,7 +106,7 @@ fn main() -> anyhow::Result<()> {
     utils::output_tree(cli.output, newick)?;
 
     // Manage tempdir and tempfiles
-    utils::manage_tempdir(cli.keep, &matrix, tempdir)?;
+    utils::manage_tempdir(cli.keep, &matrix, &cli.tempdir)?;
 
     Ok(())
 }

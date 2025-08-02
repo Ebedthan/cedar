@@ -30,6 +30,10 @@ pub struct Cli {
     #[arg(short, default_value_t = 1, value_name = "INT")]
     pub threads: usize,
 
+    /// Temporary directory name
+    #[arg(long, value_name = "DIR", default_value_t = String::from("cedar_tmp"))]
+    pub tempdir: String,
+
     /// Sketch size
     #[arg(
         short = 's',
