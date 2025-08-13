@@ -7,8 +7,9 @@ use std::collections::{HashMap, HashSet};
 
 use finch::serialization::Sketch;
 use phylo::{
-    prelude::{Newick, RootedMetaTree, RootedTree, RootedTreeNode},
-    tree::PhyloTree,
+    node::Node,
+    prelude::{Newick, RootedMetaNode, RootedMetaTree, RootedTree, RootedTreeNode, TreeNodeID},
+    tree::{PhyloTree, SimpleRootedTree},
 };
 use rand::{rng, seq::IndexedRandom};
 
@@ -55,8 +56,8 @@ fn extract_clades(newick: String) -> anyhow::Result<Vec<Clade>> {
         }
 
         // To keep only non-trivial clades (size < total leaf set)
-        // Internal node are does not have children so it result in an
-        // empty set which i discard
+        // Internal nodes do not have children so it result in an
+        // empty set which I discard
         if !leaf_names.is_empty() {
             clades.push(leaf_names);
         }
@@ -100,6 +101,39 @@ fn majority_rule_clades(
 
     Ok(majority_clades)
 }
+/*
+fn build_consensus_tree(clades: Vec<Clade>) -> anyhow::Result<SimpleRootedTree<String, f32, f32>> {
+    let all_taxa: HashSet<String> = clades.iter().flat_map(|c| c.clone()).collect();
+
+    let mut tree = SimpleRootedTree::new(0);
+
+    fn insert_clade(node: &mut Node<String, f32, f32>, clade: &Clade) -> bool {
+        let node_taxa: HashSet<String> = get_leaves(node);
+
+        if clade.is_subset(&node_taxa) {
+            for child in &mut node.get_children() {
+            let mut child_node = Node::new(child);
+            child_node.set_taxa()
+                if insert_clade(node.)
+            }
+        }
+        false
+    }
+
+    Ok(tree)
+}*/
+
+fn get_leaves(node: Node<String, f32, f32>) -> HashSet<String> {
+    let mut leaves = HashSet::new();
+    if let Some(name) = &node.get_taxa() {
+        leaves.insert(name.to_string());
+    }
+
+    for child in node.get_children() {
+        leaves.extend(get_leaves(Node::new(child)));
+    }
+    leaves
+}
 
 #[cfg(test)]
 mod tests {
@@ -107,6 +141,9 @@ mod tests {
 
     #[test]
     fn test_extract_clades() {
+        let input_str = String::from("((A:0.1,B:0.2),C:0.6);");
+        let tree = PhyloTree::from_newick(input_str.as_bytes()).unwrap();
+        println!("{:?}", tree);
         assert!(extract_clades("((A,B),(C,D));".to_string()).is_ok());
         //assert!(extract_clades("((A,C),(B,D));".to_string()).is_ok());
     }
