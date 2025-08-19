@@ -14,6 +14,14 @@ pub struct Clade {
     pub length: Option<f64>, // not used for Hash/Eq
 }
 
+impl Clade {
+    pub fn new(mut leaves: Vec<String>, length: Option<f64>) -> Self {
+        leaves.sort(); // enforce deterministic ordering
+        leaves.dedup(); // remove duplicates
+        Clade { leaves, length }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Node {
     pub name: Option<String>,
@@ -127,17 +135,17 @@ fn skip_whitespace(chars: &[char], pos: &mut usize) {
 
 /// Recursively build a tree from clades
 fn build_tree_from_clades(all_leaves: &[String], clades: &[Clade]) -> Tree {
-    let root_node = build_node(all_leaves, clades);
+    let root_node = build_node(all_leaves.to_vec(), clades);
     Tree { root: root_node }
 }
 
-fn build_node(current_leaves: &[String], clades: &[Clade]) -> Node {
+fn build_node(current_leaves: Vec<String>, clades: &[Clade]) -> Node {
+    let mut children_nodes = Vec::new();
+
     // Find child clades that are proper subsets of current leaves
     let child_clades: Vec<&Clade> = clades
         .iter()
-        .filter(|c| {
-            c.leaves.len() < current_leaves.len() && is_subset_sorted(&c.leaves, current_leaves)
-        })
+        .filter(|c| c.leaves.len() < current_leaves.len() && is_subset(&c.leaves, &current_leaves))
         .collect();
 
     if child_clades.is_empty() {
@@ -151,9 +159,8 @@ fn build_node(current_leaves: &[String], clades: &[Clade]) -> Node {
     // Keep only maximal subsets to avoid duplicates
     let maximal_clades = maximal_subsets(&child_clades);
 
-    let mut children_nodes = Vec::new();
     for clade in maximal_clades {
-        let child_node = build_node(&clade.leaves, clades);
+        let child_node = build_node(clade.leaves.clone(), clades);
         let mut node_with_len = child_node.clone();
         node_with_len.length = clade.length;
         children_nodes.push(node_with_len);
@@ -166,6 +173,10 @@ fn build_node(current_leaves: &[String], clades: &[Clade]) -> Node {
     }
 }
 
+fn is_subset(sub: &[String], sup: &[String]) -> bool {
+    sub.iter().all(|s| sup.contains(s))
+}
+
 /// Returns only clades that are not contained in any other clade in the set
 fn maximal_subsets<'a>(clades: &[&'a Clade]) -> Vec<&'a Clade> {
     clades
@@ -173,7 +184,7 @@ fn maximal_subsets<'a>(clades: &[&'a Clade]) -> Vec<&'a Clade> {
         .filter(|c1| {
             !clades
                 .iter()
-                .any(|c2| *c1 != c2 && is_subset_sorted(&c1.leaves, &c2.leaves))
+                .any(|c2| *c1 != c2 && is_subset(&c1.leaves, &c2.leaves))
         })
         .copied()
         .collect()
@@ -211,26 +222,16 @@ fn majority_rule(clades: &[Clade], threshold: usize) -> Vec<Clade> {
         counts.entry(leaves_sorted).or_default().push(clade);
     }
 
-    let mut kept = Vec::new();
-    for (_leaves, clade_refs) in counts.into_iter() {
-        if clade_refs.len() >= threshold {
-            // Average branch length over occurrences
-            let avg_length = if clade_refs.iter().any(|c| c.length.is_some()) {
-                Some(
-                    clade_refs.iter().filter_map(|c| c.length).sum::<f64>()
-                        / clade_refs.len() as f64,
-                )
+    counts
+        .into_iter()
+        .filter_map(|(_, clade_refs)| {
+            if clade_refs.len() >= threshold {
+                Some(clade_refs[0].clone())
             } else {
                 None
-            };
-
-            let mut clade_copy = (*clade_refs[0]).clone();
-            clade_copy.length = avg_length;
-            kept.push(clade_copy);
-        }
-    }
-
-    kept
+            }
+        })
+        .collect()
 }
 
 /// Extract clades from a tree, returning Vec<Clade> with sorted leaves
@@ -250,16 +251,32 @@ fn get_clades(node: &Node) -> Vec<Clade> {
         }
 
         taxa.sort(); // ensure deterministic order
-        clades.push(Clade {
-            leaves: taxa.clone(),
-            length: node.length,
-        });
-
+        taxa.dedup();
+        clades.push(Clade::new(taxa.clone(), node.length));
         taxa
     }
 
     helper(node, &mut clades);
     clades
+}
+
+fn build_consensus(trees: Vec<Tree>, threshold: usize) -> Tree {
+    let mut clades: Vec<Clade> = Vec::new();
+
+    for tree in trees {
+        clades.extend(get_clades(&tree.root));
+    }
+
+    let all_leaves: Vec<String> = clades
+        .iter()
+        .flat_map(|c| c.leaves.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let kept_clades = majority_rule(&clades, threshold);
+    let consensus = build_tree_from_clades(&all_leaves, &kept_clades);
+
+    consensus
 }
 
 /// Sample sequences sketches with replacement
@@ -283,25 +300,6 @@ pub fn sample_sketches_with_replacement(sketches: Vec<Sketch>, sample_size: usiz
     }
 
     bootstraped
-}
-
-fn build_consensus(trees: Vec<Tree>, threshold: usize) -> Tree {
-    let mut clades: Vec<Clade> = Vec::new();
-
-    for tree in trees {
-        clades.extend(get_clades(&tree.root));
-    }
-
-    let all_leaves: Vec<String> = clades
-        .iter()
-        .flat_map(|c| c.leaves.clone())
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect();
-    let kept_clades = majority_rule(&clades, threshold);
-    let consensus = build_tree_from_clades(&all_leaves, &kept_clades);
-
-    consensus
 }
 
 #[cfg(test)]
