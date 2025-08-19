@@ -135,13 +135,37 @@ fn skip_whitespace(chars: &[char], pos: &mut usize) {
 
 /// Recursively build a tree from clades
 fn build_tree_from_clades(all_leaves: &[String], clades: &[Clade]) -> Tree {
-    let root_node = build_node(all_leaves.to_vec(), clades);
+    let root_clade = Clade {
+        leaves: all_leaves.to_vec(),
+        length: None,
+    };
+
+    let root_node = build_node(&root_clade, clades);
     Tree { root: root_node }
 }
 
-fn build_node(current_leaves: Vec<String>, clades: &[Clade]) -> Node {
-    let mut children_nodes = Vec::new();
+fn build_node(clade: &Clade, clades: &[Clade]) -> Node {
+    if clade.leaves.len() == 1 {
+        // terminal leaf
+        return Node {
+            name: Some(clade.leaves[0].clone()),
+            length: clade.length,
+            children: vec![],
+        };
+    }
 
+    // internal node
+    let child_clades = find_direct_child_clades(clade, clades);
+
+    let children: Vec<Node> = child_clades.iter().map(|c| build_node(c, clades)).collect();
+
+    Node {
+        name: None,
+        length: clade.length,
+        children,
+    }
+
+    /*
     // Find child clades that are proper subsets of current leaves
     let child_clades: Vec<&Clade> = clades
         .iter()
@@ -170,7 +194,40 @@ fn build_node(current_leaves: Vec<String>, clades: &[Clade]) -> Node {
         name: None,
         length: None,
         children: children_nodes,
+    } */
+}
+
+fn find_direct_child_clades(parent: &Clade, clades: &[Clade]) -> Vec<Clade> {
+    let mut subs: Vec<Clade> = clades
+        .iter()
+        .filter(|c| {
+            c.leaves.len() < parent.leaves.len()
+                && c.leaves.iter().all(|l| parent.leaves.contains(l))
+        })
+        .cloned()
+        .collect();
+    subs.sort_by_key(|c| c.leaves.len());
+    let mut result = Vec::new();
+    let mut covered: HashSet<String> = HashSet::new();
+
+    for c in subs {
+        if !c.leaves.iter().all(|l| covered.contains(l)) {
+            covered.extend(c.leaves.iter().cloned());
+            result.push(c);
+        }
     }
+    result
+}
+
+fn find_child_clades(parent: &Clade, clades: &[Clade]) -> Vec<Clade> {
+    clades
+        .iter()
+        .filter(|c| {
+            c.leaves.len() < parent.leaves.len()
+                && c.leaves.iter().all(|l| parent.leaves.contains(l))
+        })
+        .cloned()
+        .collect()
 }
 
 fn is_subset(sub: &[String], sup: &[String]) -> bool {
