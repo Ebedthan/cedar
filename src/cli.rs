@@ -34,6 +34,10 @@ pub struct Cli {
     #[arg(long, value_name = "DIR", default_value_t = String::from("cedar_tmp"))]
     pub tempdir: String,
 
+    /// Boostrap replicates
+    #[arg(short, value_name = "INT")]
+    pub bootstrap: Option<u32>,
+
     /// Sketch size
     #[arg(
         short = 's',

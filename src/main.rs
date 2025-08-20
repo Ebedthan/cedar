@@ -6,6 +6,7 @@
 pub mod bootstrap;
 pub mod cli;
 pub mod dist;
+pub mod newick;
 pub mod sketch;
 pub mod utils;
 
@@ -17,7 +18,7 @@ use std::{fs, process};
 use anyhow::Context;
 use finch::serialization::Sketch;
 
-use crate::utils::init_rayon_pool;
+use crate::{bootstrap::sample_sketches_with_replacement, newick::Tree, utils::init_rayon_pool};
 
 fn main() -> anyhow::Result<()> {
     // Read command-line arguments
@@ -70,6 +71,11 @@ fn main() -> anyhow::Result<()> {
             kmer_size
         );
     }
+    let mut reps = 100;
+    if let Some(r) = cli.bootstrap {
+        println!("Boostraping replicates: {}", r);
+        reps = r;
+    }
 
     // Create temporary directory
     fs::create_dir_all(&cli.tempdir)
@@ -92,21 +98,40 @@ fn main() -> anyhow::Result<()> {
         .flat_map(|path| finch::open_sketch_file(path).unwrap())
         .collect();
 
-    // Step 2: Compute distance between sketches
-    let sketch_distance = dist::compute_distances(sketches);
+    if cli.bootstrap.is_some() {
+        let mut trees = Vec::new();
 
-    // 2.1. Compute matrix
-    let matrix = dist::distance_to_matrix(sketch_distance);
+        for _ in 0..reps {
+            let tmp_sketches: Vec<Sketch> =
+                sample_sketches_with_replacement(sketches.clone(), 1000);
+            let tmp_distance = dist::compute_distances(tmp_sketches);
+            let tmp_matrix = dist::distance_to_matrix(tmp_distance);
+            let tmp_tree = utils::compute_newick_tree(&tmp_matrix, cli.canonical, cli.threads)?;
+            match Tree::from_newick(&tmp_tree) {
+                Ok(tmp_tree) => trees.push(tmp_tree),
+                Err(e) => eprintln!("Error: {}", e),
+            }
+        }
+        let ln = trees.len();
+        let consensus_tree = bootstrap::build_consensus(trees, ln);
+        utils::output_tree(cli.output, consensus_tree.to_newick())?;
+    } else {
+        // Step 2: Compute distance between sketches
+        let sketch_distance = dist::compute_distances(sketches);
 
-    // Step 3: Compute tree
-    // 3.1. Compute tree;
-    let newick: String = utils::compute_newick_tree(&matrix, cli.canonical, cli.threads)?;
+        // 2.1. Compute matrix
+        let matrix = dist::distance_to_matrix(sketch_distance);
 
-    // 3.2. Output tree
-    utils::output_tree(cli.output, newick)?;
+        // Step 3: Compute tree
+        // 3.1. Compute tree
+        let newick: String = utils::compute_newick_tree(&matrix, cli.canonical, cli.threads)?;
 
-    // Manage tempdir and tempfiles
-    utils::manage_tempdir(cli.keep, &matrix, &cli.tempdir)?;
+        // 3.2. Output tree
+        utils::output_tree(cli.output, newick)?;
+
+        // Manage tempdir and tempfiles
+        utils::manage_tempdir(cli.keep, &matrix, &cli.tempdir)?;
+    }
 
     Ok(())
 }
