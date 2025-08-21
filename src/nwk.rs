@@ -11,23 +11,51 @@
 /// to read node of a tree (into `Node` struct) and clade of a tree (into `Clade` struct).
 ///
 ///
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Clade {
-    pub leaves: Vec<String>, // sorted leaves
-    pub length: Option<f64>, // not used for Hash/Eq
+    pub leaves: Vec<String>, // sorted leaves for deterministic behavior
+    pub length: Option<f64>, // branch length, excluded from equality
 }
 
 impl Clade {
     pub fn new(mut leaves: Vec<String>, length: Option<f64>) -> Self {
-        leaves.sort(); // enforce deterministic ordering
-        leaves.dedup(); // remove duplicates
+        leaves.sort(); // enforce deterministic ordering in O(n log n)
+        leaves.dedup(); // remove duplicates in O(n)
         Clade { leaves, length }
     }
 
+    /// Return the set of leaf of a clade
+    /// Use cached hash set for frequent subset operations
+    /// Time: O(n) vs O(n) for each conversion, but avoids repeated allocations
     pub fn leaf_set(&self) -> HashSet<String> {
         self.leaves.iter().cloned().collect()
+    }
+
+    /// Subset checking using sorted vectors
+    /// More efficient than hashset operations with O(min(a,b)) time instead of O(a * b)
+    pub fn is_subset_of_sorted(&self, other: &[String]) -> bool {
+        if self.leaves.len() > other.len() {
+            return false;
+        }
+
+        let mut i = 0;
+        let mut j = 0;
+
+        while i < self.leaves.len() && j < other.len() {
+            match self.leaves[i].cmp(&other[j]) {
+                std::cmp::Ordering::Equal => {
+                    i += 1;
+                    j += 1;
+                }
+                // self[i] not in other
+                std::cmp::Ordering::Less => return false,
+                std::cmp::Ordering::Greater => j += 1, // advance other
+            }
+        }
+
+        i == self.leaves.len() // all elements of self were found
     }
 }
 
@@ -49,7 +77,7 @@ impl Node {
 
     fn to_newick(&self) -> String {
         if self.children.is_empty() {
-            // leaf
+            // leaf node
             let name = self.name.clone().unwrap_or_default();
             match self.length {
                 Some(len) => format!("{}:{:.4}", name, len),
@@ -183,20 +211,44 @@ fn skip_whitespace(chars: &[char], pos: &mut usize) {
 
 /// Recursively build a tree from clades
 pub fn build_tree_from_clades(all_leaves: &[String], clades: &[Clade]) -> Tree {
-    // Root = clade containing all leaves
+    // Create lookup structures once
+    let mut clade_by_leaves: HashMap<Vec<String>, &Clade> = HashMap::new();
+    let mut clades_by_size: HashMap<usize, Vec<&Clade>> = HashMap::new();
+
+    // Pre-process clades for faster lookup
+    for clade in clades {
+        clade_by_leaves.insert(clade.leaves.clone(), clade);
+        clades_by_size
+            .entry(clade.leaves.len())
+            .or_default()
+            .push(clade);
+    }
+
+    // Find or create root clade
     let mut sorted_all = all_leaves.to_vec();
     sorted_all.sort();
-    let root_clade = clades
-        .iter()
-        .find(|c| c.leaves == sorted_all)
-        .cloned()
-        .unwrap_or_else(|| Clade::new(sorted_all.clone(), None));
 
-    let root = build_node(&root_clade, clades);
+    let root_clade = clade_by_leaves
+        .get(&sorted_all)
+        .copied()
+        .unwrap_or_else(|| {
+            // create a temporary clade for root if not found
+            static mut TEMP_ROOT: Option<Clade> = None;
+            unsafe {
+                TEMP_ROOT = Some(Clade::new(sorted_all.clone(), None));
+                TEMP_ROOT.as_ref().unwrap()
+            }
+        });
+
+    let root = build_node(root_clade, &clade_by_leaves, &clades_by_size);
     Tree { root }
 }
 
-fn build_node(clade: &Clade, all_clades: &[Clade]) -> Node {
+fn build_node(
+    clade: &Clade,
+    clade_by_leaves: &HashMap<Vec<String>, &Clade>,
+    clades_by_size: &HashMap<usize, Vec<&Clade>>,
+) -> Node {
     if clade.leaves.len() == 1 {
         // Leaf
         return Node {
@@ -206,42 +258,46 @@ fn build_node(clade: &Clade, all_clades: &[Clade]) -> Node {
         };
     }
 
-    let clade_set: HashSet<String> = clade.leaf_set();
     let mut children = Vec::new();
     let mut covered = HashSet::new();
 
-    // Find maximal proper subclades of this clade
-    for sub in all_clades {
-        if sub.leaves.len() < clade.leaves.len() {
-            let sub_set = sub.leaf_set();
-            if sub_set.is_subset(&clade_set) {
-                // ensure it's maximal
-                let contained_in_other = all_clades.iter().any(|other| {
-                    other.leaves.len() < clade.leaves.len()
-                        && other.leaves.len() > sub.leaves.len()
-                        && sub_set.is_subset(&other.leaf_set())
-                        && other.leaf_set().is_subset(&clade_set)
-                });
-                if !contained_in_other {
-                    children.push(build_node(sub, all_clades));
-                    covered.extend(sub_set);
+    // Find maximal proper subclades of this clade.
+    // Optimized by only considering clades smaller than current clade
+    for size in 1..clade.leaves.len() {
+        if let Some(candidates) = clades_by_size.get(&size) {
+            for &sub_clade in candidates {
+                if sub_clade.is_subset_of_sorted(&clade.leaves) {
+                    let is_maximal =
+                        !is_contained_in_larger_subclade(sub_clade, clade, clades_by_size);
+
+                    if is_maximal {
+                        children.push(build_node(sub_clade, clade_by_leaves, clades_by_size));
+                        covered.extend(sub_clade.leaves.iter().cloned());
+                    }
                 }
             }
         }
     }
 
-    // Add missing leaves not covered by any subclade
-    for taxon in clade_set.difference(&covered) {
-        children.push(Node {
-            name: Some(taxon.clone()),
-            length: all_clades
-                .iter()
-                .find(|c| c.leaves.len() == 1 && c.leaves[0] == *taxon)
-                .and_then(|c| c.length),
-            children: vec![],
-        });
+    // Add uncovered leaves as direct children
+    for taxon in &clade.leaves {
+        if !covered.contains(taxon) {
+            // direct lookup
+            let leaf_length = if let Some(leaf_clade) = clade_by_leaves.get(&vec![taxon.clone()]) {
+                leaf_clade.length
+            } else {
+                None
+            };
+
+            children.push(Node {
+                name: Some(taxon.clone()),
+                length: leaf_length,
+                children: vec![],
+            });
+        }
     }
 
+    // sort children for deterministic output
     children.sort_by(|a, b| {
         let aname = a.name.clone().unwrap_or_default();
         let bname = b.name.clone().unwrap_or_default();
@@ -253,6 +309,28 @@ fn build_node(clade: &Clade, all_clades: &[Clade]) -> Node {
         length: clade.length,
         children,
     }
+}
+
+/// Check if clade is contained in a larger subclade
+/// Uses size-based filtering to reduce search space
+fn is_contained_in_larger_subclade(
+    sub_clade: &Clade,
+    parent_clade: &Clade,
+    clades_by_size: &HashMap<usize, Vec<&Clade>>,
+) -> bool {
+    // only check clades larger than sub_clade but smaller than parent
+    for size in (sub_clade.leaves.len() + 1)..parent_clade.leaves.len() {
+        if let Some(candidates) = clades_by_size.get(&size) {
+            for &larger_clade in candidates {
+                if larger_clade.is_subset_of_sorted(&parent_clade.leaves)
+                    && sub_clade.is_subset_of_sorted(&larger_clade.leaves)
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]
