@@ -85,8 +85,12 @@ impl Node {
             }
         } else {
             // internal node
-            let children_str: Vec<String> = self.children.iter().map(|c| c.to_newick()).collect();
-            let joined = children_str.join(",");
+            let joined = self
+                .children
+                .iter()
+                .map(|c| c.to_newick())
+                .collect::<Vec<_>>()
+                .join(",");
 
             let label = self.name.clone().unwrap_or_default();
             match self.length {
@@ -296,9 +300,10 @@ fn build_node(
 
     // sort children for deterministic output
     children.sort_by(|a, b| {
-        let aname = a.name.clone().unwrap_or_default();
-        let bname = b.name.clone().unwrap_or_default();
-        aname.cmp(&bname)
+        a.name
+            .as_deref()
+            .unwrap_or("")
+            .cmp(b.name.as_deref().unwrap_or(""))
     });
 
     Node {
