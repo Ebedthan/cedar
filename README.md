@@ -1,8 +1,9 @@
 # cedar
 
-<a href="https://github.com/Ebedthan/cedar/blob/main/LICENSE-MIT">
-    <img src="https://img.shields.io/badge/license-MIT-blue?style=flat">
-</a>
+[![CI](https://github.com/Ebedthan/cedar/actions/workflows/ci.yml/badge.svg)](https://github.com/Ebedthan/cedar/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/Ebedthan/cedar/graph/badge.svg?token=S3OLFFHF4X)](https://codecov.io/gh/Ebedthan/cedar)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=flat)](https://github.com/Ebedthan/cedar/blob/main/LICENSE)
+
 
 ## 🗺️ Overview
 
@@ -48,4 +49,4 @@ Full help is available from `cedar --help`;
 
 ### Licence
 `cedar` is distributed under the terms of the MIT license.
-See [LICENSE-MIT](https://github.com/Ebedthan/xgt/blob/main/LICENSE-MIT) for details.
+See [LICENSE-MIT](https://github.com/Ebedthan/cedar/blob/main/LICENSE-MIT) for details.
