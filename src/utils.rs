@@ -17,27 +17,6 @@ pub fn init_rayon_pool(threads: usize) {
     });
 }
 
-pub fn compute_newick_tree(
-    matrix: &speedytree::DistanceMatrix,
-    is_canonical: bool,
-    num_threads: usize,
-) -> anyhow::Result<String> {
-    if is_canonical {
-        let tree =
-            speedytree::NeighborJoiningSolver::<speedytree::Canonical>::default(matrix.clone())
-                .solve()
-                .unwrap();
-        Ok(speedytree::to_newick(&tree))
-    } else {
-        let tree =
-            speedytree::NeighborJoiningSolver::<speedytree::RapidBtrees>::default(matrix.clone())
-                .set_chunk_size(std::cmp::max(matrix.size() / num_threads, 1))
-                .solve()
-                .unwrap();
-        Ok(speedytree::to_newick(&tree))
-    }
-}
-
 pub fn output_tree(output: Option<String>, newick: String) -> anyhow::Result<()> {
     match output {
         Some(path) => {
@@ -64,6 +43,12 @@ pub fn manage_tempdir(
     }
 }
 
+/// Check if provided file is in FASTA format.
+///
+/// **Input**: `path`: file path
+///
+/// **Output**: a boolean value. `true` if is FASTA formated, `false` otherwise.
+///
 pub fn is_fasta_format(path: &str) -> bool {
     let file = File::open(path).expect("file should exists before opening.");
     let reader = BufReader::new(file);
@@ -79,6 +64,11 @@ pub fn is_fasta_format(path: &str) -> bool {
     false
 }
 
+/// Check if file is multi FASTA or not.
+///
+/// **Input**: `path`: file path
+///
+/// **Output**: a boolean value. `true` if multi fasta, `false` otherwise.
 pub fn is_multi_fasta(path: &str) -> bool {
     let file = File::open(path).expect("file should be available");
     let reader = BufReader::new(file);
@@ -97,7 +87,12 @@ pub fn is_multi_fasta(path: &str) -> bool {
     false
 }
 
-// Return sequence id with its length
+/// Compute sequence length of each provided sequence.
+///
+/// **Input**: `path`: file path
+///
+/// **Output**: a `anyhow::Result` of tuple of String (sequence id) and usize (sequence size).
+///
 pub fn get_seq_stats(path: &str) -> anyhow::Result<(String, usize)> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);

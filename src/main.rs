@@ -19,7 +19,8 @@ use anyhow::Context;
 use finch::serialization::Sketch;
 
 use crate::{
-    bootstrap::sample_sketches_with_replacement, cli::Commands, nwk::Tree, utils::init_rayon_pool,
+    bootstrap::sample_sketches_with_replacement, cli::Commands, dist::ComputeTree, nwk::Tree,
+    utils::init_rayon_pool,
 };
 
 fn main() -> anyhow::Result<()> {
@@ -113,8 +114,7 @@ fn main() -> anyhow::Result<()> {
                         sample_sketches_with_replacement(sketches.clone(), 1000);
                     let tmp_distance = dist::compute_distances(tmp_sketches);
                     let tmp_matrix = dist::distance_to_matrix(tmp_distance);
-                    let tmp_tree =
-                        utils::compute_newick_tree(&tmp_matrix, args.canonical, cli.threads)?;
+                    let tmp_tree = tmp_matrix.compute_newick_tree(args.canonical, cli.threads)?;
                     match Tree::from_newick(&tmp_tree) {
                         Ok(tmp_tree) => trees.push(tmp_tree),
                         Err(e) => eprintln!("Error: {}", e),
@@ -129,11 +129,9 @@ fn main() -> anyhow::Result<()> {
 
                 // 2.1. Compute matrix
                 let matrix = dist::distance_to_matrix(sketch_distance);
-
+                let newick = matrix.compute_newick_tree(args.canonical, cli.threads)?;
                 // Step 3: Compute tree
                 // 3.1. Compute tree
-                let newick: String =
-                    utils::compute_newick_tree(&matrix, args.canonical, cli.threads)?;
 
                 // 3.2. Output tree
                 utils::output_tree(args.output, newick)?;

@@ -93,6 +93,34 @@ pub fn to_phylip(dist: DistanceMatrix, output: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub trait ComputeTree {
+    fn compute_newick_tree(&self, is_canonical: bool, num_threads: usize)
+        -> anyhow::Result<String>;
+}
+
+impl ComputeTree for DistanceMatrix {
+    fn compute_newick_tree(
+        &self,
+        is_canonical: bool,
+        num_threads: usize,
+    ) -> anyhow::Result<String> {
+        if is_canonical {
+            let tree =
+                speedytree::NeighborJoiningSolver::<speedytree::Canonical>::default(self.clone())
+                    .solve()
+                    .unwrap();
+            Ok(speedytree::to_newick(&tree))
+        } else {
+            let tree =
+                speedytree::NeighborJoiningSolver::<speedytree::RapidBtrees>::default(self.clone())
+                    .set_chunk_size(std::cmp::max(self.size() / num_threads, 1))
+                    .solve()
+                    .unwrap();
+            Ok(speedytree::to_newick(&tree))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

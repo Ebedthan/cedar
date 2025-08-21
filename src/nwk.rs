@@ -190,7 +190,7 @@ fn parse_name(chars: &mut std::iter::Peekable<Chars>) -> Result<String, String> 
     let mut buf = String::new();
     let unwanted = [':', ',', ')', '(', ';'];
     while let Some(&c) = chars.peek() {
-        if unwanted.iter().any(|x| *x == c) {
+        if unwanted.contains(&c) {
             break;
         }
         buf.push(c);
@@ -207,7 +207,7 @@ fn parse_branch_length(chars: &mut std::iter::Peekable<Chars>) -> Result<f64, St
     let mut buf = String::new();
     let unwanted = ['.', '-', 'e', 'E'];
     while let Some(&c) = chars.peek() {
-        if c.is_ascii_digit() || unwanted.iter().any(|x| *x == c) {
+        if c.is_ascii_digit() || unwanted.contains(&c) {
             buf.push(c);
             chars.next();
         } else {
