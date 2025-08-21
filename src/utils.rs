@@ -74,10 +74,7 @@ pub fn is_fasta_format(path: &str) -> bool {
         if trimmed_line.is_empty() {
             continue;
         }
-        return match trimmed_line.chars().next() {
-            Some('>') => true,
-            _ => false,
-        };
+        return matches!(trimmed_line.chars().next(), Some('>'));
     }
     false
 }
@@ -115,8 +112,8 @@ pub fn get_seq_stats(path: &str) -> anyhow::Result<(String, usize)> {
             continue;
         }
 
-        if trimmed.starts_with('>') {
-            let tmp_id = trimmed[1..]
+        if let Some(stripped) = trimmed.strip_prefix('>') {
+            let tmp_id = stripped
                 .split_whitespace()
                 .next()
                 .ok_or_else(|| anyhow::anyhow!("Malformed fasta header: {}", trimmed))?;
@@ -186,8 +183,8 @@ pub fn detect_outliers(
         let upper_bound = q3 + 3 * iqr / 2;
         outliers = data
             .iter()
-            .cloned()
             .filter(|x| x.1 < lower_bound || x.1 > upper_bound)
+            .cloned()
             .collect();
     }
 

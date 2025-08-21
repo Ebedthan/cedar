@@ -82,80 +82,8 @@ fn build_node(clade: &Clade, all_clades: &[Clade]) -> Node {
     }
 }
 
-fn find_direct_child_clades(parent: &Clade, clades: &[Clade]) -> Vec<Clade> {
-    let mut subs: Vec<Clade> = clades
-        .iter()
-        .filter(|c| {
-            c.leaves.len() < parent.leaves.len()
-                && c.leaves.iter().all(|l| parent.leaves.contains(l))
-        })
-        .cloned()
-        .collect();
-    subs.sort_by_key(|c| c.leaves.len());
-    let mut result = Vec::new();
-    let mut covered: HashSet<String> = HashSet::new();
-
-    for c in subs {
-        if !c.leaves.iter().all(|l| covered.contains(l)) {
-            covered.extend(c.leaves.iter().cloned());
-            result.push(c);
-        }
-    }
-    result
-}
-
-fn find_child_clades(parent: &Clade, clades: &[Clade]) -> Vec<Clade> {
-    clades
-        .iter()
-        .filter(|c| {
-            c.leaves.len() < parent.leaves.len()
-                && c.leaves.iter().all(|l| parent.leaves.contains(l))
-        })
-        .cloned()
-        .collect()
-}
-
-fn is_subset(sub: &[String], sup: &[String]) -> bool {
-    sub.iter().all(|s| sup.contains(s))
-}
-
-/// Returns only clades that are not contained in any other clade in the set
-fn maximal_subsets<'a>(clades: &[&'a Clade]) -> Vec<&'a Clade> {
-    clades
-        .iter()
-        .filter(|c1| {
-            !clades
-                .iter()
-                .any(|c2| *c1 != c2 && is_subset(&c1.leaves, &c2.leaves))
-        })
-        .copied()
-        .collect()
-}
-
-/// Check if a sorted slice `a` is a subset of sorted slice `b`
-fn is_subset_sorted(a: &[String], b: &[String]) -> bool {
-    let mut i = 0;
-    let mut j = 0;
-
-    while i < a.len() && j < b.len() {
-        match a[i].cmp(&b[j]) {
-            std::cmp::Ordering::Equal => {
-                i += 1;
-                j += 1;
-            }
-            std::cmp::Ordering::Greater => {
-                return false;
-            }
-            std::cmp::Ordering::Less => {
-                j += 1;
-            }
-        }
-    }
-    i == a.len()
-}
-
 /// Majority rule: keep clades occurring >= threshold times
-fn majority_rule(clades: Vec<Clade>, n_trees: usize, threshold: usize) -> Vec<Clade> {
+fn majority_rule(clades: Vec<Clade>, threshold: usize) -> Vec<Clade> {
     let mut clade_map: HashMap<Vec<String>, (usize, Vec<f64>)> = HashMap::new();
 
     // group clades by their leaf sets and collect their lengths
@@ -217,7 +145,6 @@ fn get_clades(node: &Node) -> Vec<Clade> {
 
 pub fn build_consensus(trees: Vec<Tree>, threshold: usize) -> Tree {
     let mut clades: Vec<Clade> = Vec::new();
-    let n_trees = trees.len();
 
     for tree in trees {
         clades.extend(get_clades(&tree.root));
@@ -231,10 +158,8 @@ pub fn build_consensus(trees: Vec<Tree>, threshold: usize) -> Tree {
         .collect();
     all_leaves.sort();
 
-    let kept_clades = majority_rule(clades, n_trees, threshold);
-    let consensus = build_tree_from_clades(&all_leaves, &kept_clades);
-
-    consensus
+    let kept_clades = majority_rule(clades, threshold);
+    build_tree_from_clades(&all_leaves, &kept_clades)
 }
 
 // Helper functions

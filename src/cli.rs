@@ -3,7 +3,7 @@
 // This file may not be copied, modified, or distributed except according
 // to those terms.
 
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -14,6 +14,28 @@ use clap::Parser;
     arg_required_else_help = true
 )]
 pub struct Cli {
+    /// Number of threads to use
+    #[arg(short, default_value_t = 1, value_name = "INT")]
+    pub threads: usize,
+
+    /// Add verbosity to program
+    #[arg(short = 'v', long, action = clap::ArgAction::SetTrue)]
+    pub verbose: bool,
+
+    #[command(subcommand)]
+    pub command: Commands,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Commands {
+    /// Build NJ tree using mash distance
+    Build(BuildArgs),
+
+    /// Compare trees
+    Compare(CompareArgs),
+}
+#[derive(Args, Debug)]
+pub struct BuildArgs {
     /// Fasta file(s) to build trees [suports .gz, .xz, .bz2]
     #[arg(required = true)]
     pub input: Vec<String>,
@@ -25,10 +47,6 @@ pub struct Cli {
     /// Keep sketches and distance files
     #[arg(short = 'K')]
     pub keep: bool,
-
-    /// Number of threads to use
-    #[arg(short, default_value_t = 1, value_name = "INT")]
-    pub threads: usize,
 
     /// Temporary directory name
     #[arg(long, value_name = "DIR", default_value_t = String::from("cedar_tmp"))]
@@ -81,3 +99,6 @@ pub struct Cli {
     #[arg(short = 'c', help_heading = "Tree options")]
     pub canonical: bool,
 }
+
+#[derive(Args, Debug)]
+pub struct CompareArgs {}
