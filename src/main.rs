@@ -6,7 +6,7 @@
 pub mod bootstrap;
 pub mod cli;
 pub mod dist;
-pub mod newick;
+pub mod nwk;
 pub mod sketch;
 pub mod utils;
 
@@ -19,8 +19,7 @@ use anyhow::Context;
 use finch::serialization::Sketch;
 
 use crate::{
-    bootstrap::sample_sketches_with_replacement, cli::Commands, newick::Tree,
-    utils::init_rayon_pool,
+    bootstrap::sample_sketches_with_replacement, cli::Commands, nwk::Tree, utils::init_rayon_pool,
 };
 
 fn main() -> anyhow::Result<()> {

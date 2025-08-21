@@ -3,84 +3,10 @@
 // This file may not be copied, modified, or distributed except according
 // to those terms.
 
-use crate::newick::{Clade, Node, Tree};
+use crate::nwk::{build_tree_from_clades, Clade, Node, Tree};
 use finch::serialization::Sketch;
 use rand::{rng, seq::IndexedRandom};
 use std::collections::{HashMap, HashSet};
-
-/// Recursively build a tree from clades
-fn build_tree_from_clades(all_leaves: &[String], clades: &[Clade]) -> Tree {
-    // Root = clade containing all leaves
-    let mut sorted_all = all_leaves.to_vec();
-    sorted_all.sort();
-    let root_clade = clades
-        .iter()
-        .find(|c| c.leaves == sorted_all)
-        .cloned()
-        .unwrap_or_else(|| Clade::new(sorted_all.clone(), None));
-
-    let root = build_node(&root_clade, clades);
-    Tree { root }
-}
-
-fn build_node(clade: &Clade, all_clades: &[Clade]) -> Node {
-    if clade.leaves.len() == 1 {
-        // Leaf
-        return Node {
-            name: Some(clade.leaves[0].clone()),
-            length: clade.length,
-            children: vec![],
-        };
-    }
-
-    let clade_set: HashSet<String> = clade.leaf_set();
-    let mut children = Vec::new();
-    let mut covered = HashSet::new();
-
-    // Find maximal proper subclades of this clade
-    for sub in all_clades {
-        if sub.leaves.len() < clade.leaves.len() {
-            let sub_set = sub.leaf_set();
-            if sub_set.is_subset(&clade_set) {
-                // ensure it's maximal
-                let contained_in_other = all_clades.iter().any(|other| {
-                    other.leaves.len() < clade.leaves.len()
-                        && other.leaves.len() > sub.leaves.len()
-                        && sub_set.is_subset(&other.leaf_set())
-                        && other.leaf_set().is_subset(&clade_set)
-                });
-                if !contained_in_other {
-                    children.push(build_node(sub, all_clades));
-                    covered.extend(sub_set);
-                }
-            }
-        }
-    }
-
-    // Add missing leaves not covered by any subclade
-    for taxon in clade_set.difference(&covered) {
-        children.push(Node {
-            name: Some(taxon.clone()),
-            length: all_clades
-                .iter()
-                .find(|c| c.leaves.len() == 1 && c.leaves[0] == *taxon)
-                .and_then(|c| c.length),
-            children: vec![],
-        });
-    }
-
-    children.sort_by(|a, b| {
-        let aname = a.name.clone().unwrap_or_default();
-        let bname = b.name.clone().unwrap_or_default();
-        aname.cmp(&bname)
-    });
-
-    Node {
-        name: None,
-        length: clade.length,
-        children,
-    }
-}
 
 /// Majority rule: keep clades occurring >= threshold times
 fn majority_rule(clades: Vec<Clade>, threshold: usize) -> Vec<Clade> {
