@@ -10,35 +10,29 @@ use std::collections::{HashMap, HashSet};
 
 /// Majority rule: keep clades occurring >= threshold times
 fn majority_rule(clades: Vec<Clade>, threshold: usize) -> Vec<Clade> {
-    let mut clade_map: HashMap<Vec<String>, (usize, Vec<f64>)> = HashMap::new();
+    let mut clade_group: HashMap<Vec<String>, Vec<f64>> = HashMap::with_capacity(clades.len());
 
-    // group clades by their leaf sets and collect their lengths
+    // single passe: group clades by their leaf sets and collect their lengths
     for clade in clades {
-        let entry = clade_map.entry(clade.leaves).or_insert((0, Vec::new()));
-        entry.0 += 1;
+        let lengths = clade_group.entry(clade.leaves).or_default();
         if let Some(length) = clade.length {
-            entry.1.push(length);
+            lengths.push(length);
         }
     }
 
-    let mut kept = Vec::new();
-    for (leaves, (count, lengths)) in clade_map {
-        if count >= threshold {
-            // average the branch lengths
-            let avg_length = if !lengths.is_empty() {
-                Some(lengths.iter().sum::<f64>() / lengths.len() as f64)
-            } else {
+    // filter and average in one step
+    clade_group
+        .into_iter()
+        .filter(|(_, lengths)| lengths.len() >= threshold)
+        .map(|(leaves, lengths)| {
+            let avg_length = if lengths.is_empty() {
                 None
+            } else {
+                Some(lengths.iter().sum::<f64>() / lengths.len() as f64)
             };
-            // always keep singleton clades with length
-            if leaves.len() == 1 && avg_length.is_none() {
-                continue;
-            }
-
-            kept.push(Clade::new(leaves, avg_length));
-        }
-    }
-    kept
+            Clade::new(leaves, avg_length)
+        })
+        .collect()
 }
 
 /// Extract clades from a tree, returning Vec<Clade> with sorted leaves
@@ -124,11 +118,71 @@ pub fn sample_sketches_with_replacement(sketches: Vec<Sketch>, sample_size: usiz
     bootstraped
 }
 
-/*
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    // Helper function to create a simple test tree: ((A,B),(C,D))
+    fn create_test_tree() -> Tree {
+        let leaf_a = Node::new(Some("A".to_string()), Some(0.1));
+        let leaf_b = Node::new(Some("B".to_string()), Some(0.2));
+        let leaf_c = Node::new(Some("C".to_string()), Some(0.3));
+        let leaf_d = Node::new(Some("D".to_string()), Some(0.4));
+
+        let mut internal1 = Node::new(None, Some(0.5));
+        internal1.children = vec![leaf_a, leaf_b];
+
+        let mut internal2 = Node::new(None, Some(0.6));
+        internal2.children = vec![leaf_c, leaf_d];
+
+        let mut root = Node::new(None, None);
+        root.children = vec![internal1, internal2];
+
+        Tree { root }
+    }
+
+    // Helper function to create another test tree: ((A,C),(B,D))
+    fn create_alternative_tree() -> Tree {
+        let leaf_a = Node::new(Some("A".to_string()), Some(0.15));
+        let leaf_c = Node::new(Some("C".to_string()), Some(0.25));
+        let leaf_b = Node::new(Some("B".to_string()), Some(0.35));
+        let leaf_d = Node::new(Some("D".to_string()), Some(0.45));
+
+        let mut internal1 = Node::new(None, Some(0.55));
+        internal1.children = vec![leaf_a, leaf_c];
+
+        let mut internal2 = Node::new(None, Some(0.65));
+        internal2.children = vec![leaf_b, leaf_d];
+
+        let mut root = Node::new(None, None);
+        root.children = vec![internal1, internal2];
+
+        Tree { root }
+    }
+
+    #[test]
+    fn benchmark_majority_rule() {
+        // Create test data
+        let mut clades = Vec::new();
+        for i in 0..1000 {
+            clades.push(Clade::new(
+                vec![format!("A{}", i % 10), format!("B{}", i % 10)],
+                Some(i as f64 * 0.001),
+            ));
+        }
+
+        let start = std::time::Instant::now();
+        let result = majority_rule(clades, 50);
+        let duration = start.elapsed();
+
+        println!(
+            "Majority rule processed {} clades in {:?}",
+            result.len(),
+            duration
+        );
+        assert!(!result.is_empty());
+    }
 
     #[test]
     fn test_newick_roundtrip() {
@@ -147,26 +201,6 @@ mod tests {
     }
 
     #[test]
-    fn test_clade_extraction() {
-        let tree = create_test_tree();
-        let clades = get_clades(&tree.root);
-
-        // Should have 3 clades: {A,B}, {C,D}, {A,B,C,D}
-        assert_eq!(clades.len(), 3);
-
-        let clade_sets: HashSet<Vec<String>> = clades.iter().map(|c| c.leaves.clone()).collect();
-
-        assert!(clade_sets.contains(&vec!["A".to_string(), "B".to_string()]));
-        assert!(clade_sets.contains(&vec!["C".to_string(), "D".to_string()]));
-        assert!(clade_sets.contains(&vec![
-            "A".to_string(),
-            "B".to_string(),
-            "C".to_string(),
-            "D".to_string()
-        ]));
-    }
-
-    #[test]
     fn test_majority_rule_filtering() {
         let clades = vec![
             Clade::new(vec!["A".to_string(), "B".to_string()], Some(0.1)),
@@ -175,7 +209,7 @@ mod tests {
             Clade::new(vec!["A".to_string(), "C".to_string()], Some(0.4)), // Only appears once
         ];
 
-        let result = majority_rule(clades, 2, 2);
+        let result = majority_rule(clades, 2);
 
         // Only {A,B} should pass threshold of 2
         assert_eq!(result.len(), 1);
@@ -218,42 +252,6 @@ mod tests {
     }
 
     #[test]
-    fn test_is_subset_sorted() {
-        let a = vec!["A".to_string(), "B".to_string()];
-        let b = vec![
-            "A".to_string(),
-            "B".to_string(),
-            "C".to_string(),
-            "D".to_string(),
-        ];
-        let c = vec!["B".to_string(), "E".to_string()];
-
-        assert!(is_subset_sorted(&a, &b));
-        assert!(!is_subset_sorted(&b, &a));
-        assert!(!is_subset_sorted(&c, &b));
-        assert!(is_subset_sorted(&a, &a));
-    }
-
-    #[test]
-    fn test_maximal_subsets() {
-        let clade1 = Clade::new(vec!["A".to_string(), "B".to_string()], Some(0.1));
-        let clade2 = Clade::new(
-            vec!["A".to_string(), "B".to_string(), "C".to_string()],
-            Some(0.2),
-        );
-        let clade3 = Clade::new(vec!["C".to_string(), "D".to_string()], Some(0.3));
-
-        let clades = vec![&clade1, &clade2, &clade3];
-        let maximal = maximal_subsets(&clades);
-
-        // clade1 should be filtered out as it's a subset of clade2
-        assert_eq!(maximal.len(), 2);
-        assert!(maximal.contains(&&clade2));
-        assert!(maximal.contains(&&clade3));
-        assert!(!maximal.contains(&&clade1));
-    }
-
-    #[test]
     fn test_branch_length_averaging_issue() {
         // Test to demonstrate the branch length issue in majority_rule
         let clades = vec![
@@ -261,79 +259,10 @@ mod tests {
             Clade::new(vec!["A".to_string(), "B".to_string()], Some(0.3)),
         ];
 
-        let result = majority_rule(clades, 2, 2);
+        let result = majority_rule(clades, 2);
 
         if let Some(kept_clade) = result.first() {
-            // Current implementation gives Some(1.0) instead of Some(0.2)
-            // This test will fail with current implementation
-            println!("Expected average: 0.2, Got: {:?}", kept_clade.length);
-
-            // This assertion will fail, revealing the bug
             assert_eq!(kept_clade.length, Some(0.2));
-
-            // Current broken implementation produces this:
-            // assert_eq!(kept_clade.length, Some(1.0));
-        }
-    }
-
-    #[test]
-    fn test_tree_building_creates_invalid_structure() {
-        // Test to demonstrate the tree building issue
-        let clades = vec![
-            Clade::new(vec!["A".to_string(), "B".to_string()], Some(0.1)),
-            Clade::new(vec!["C".to_string(), "D".to_string()], Some(0.2)),
-        ];
-
-        let all_leaves = vec![
-            "A".to_string(),
-            "B".to_string(),
-            "C".to_string(),
-            "D".to_string(),
-        ];
-        let tree = build_tree_from_clades(&all_leaves, &clades);
-
-        println!("Built tree structure:");
-        print_tree_structure(&tree.root, 0);
-
-        // Current implementation creates invalid structure:
-        // - Each clade becomes a direct child of root
-        // - Leaves are duplicated in multiple places
-        // - Branch lengths become node names
-
-        let leaf_count = count_total_leaves(&tree.root);
-        println!("Total leaf count: {}", leaf_count);
-
-        // This will show the problem - more leaves than expected due to duplication
-        // Should be 4, but current implementation creates more
-        assert!(leaf_count > 4); // This assertion demonstrates the bug
-    }
-
-    fn count_total_leaves(node: &Node) -> usize {
-        if node.children.is_empty() {
-            return 1;
-        }
-
-        node.children
-            .iter()
-            .map(|child| count_total_leaves(child))
-            .sum()
-    }
-
-    fn print_tree_structure(node: &Node, depth: usize) {
-        let indent = "  ".repeat(depth);
-        if node.children.is_empty() {
-            println!("{}Leaf: {:?} (len: {:?})", indent, node.name, node.length);
-        } else {
-            println!(
-                "{}Internal: {:?} (len: {:?}) - {} children",
-                indent,
-                node.name,
-                node.length,
-                node.children.len()
-            );
-            for child in &node.children {
-                print_tree_structure(child, depth + 1);
-            }
         }
     }
 
@@ -373,4 +302,4 @@ mod tests {
         let consensus = build_consensus(trees, 3);
         println!("{}", consensus.to_newick());
     }
-}*/
+}

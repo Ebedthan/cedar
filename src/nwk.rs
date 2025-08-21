@@ -224,21 +224,18 @@ pub fn build_tree_from_clades(all_leaves: &[String], clades: &[Clade]) -> Tree {
             .push(clade);
     }
 
-    // Find or create root clade
+    // sort all leaves
     let mut sorted_all = all_leaves.to_vec();
     sorted_all.sort();
 
-    let root_clade = clade_by_leaves
-        .get(&sorted_all)
-        .copied()
-        .unwrap_or_else(|| {
-            // create a temporary clade for root if not found
-            static mut TEMP_ROOT: Option<Clade> = None;
-            unsafe {
-                TEMP_ROOT = Some(Clade::new(sorted_all.clone(), None));
-                TEMP_ROOT.as_ref().unwrap()
-            }
-        });
+    // own a fallback root clade if not present in the input
+    let fallback_root;
+    let root_clade: &Clade = if let Some(c) = clade_by_leaves.get(&sorted_all) {
+        c
+    } else {
+        fallback_root = Clade::new(sorted_all.clone(), None);
+        &fallback_root
+    };
 
     let root = build_node(root_clade, &clade_by_leaves, &clades_by_size);
     Tree { root }
@@ -337,44 +334,6 @@ fn is_contained_in_larger_subclade(
 mod tests {
     use super::*;
 
-    // Helper function to create a simple test tree: ((A,B),(C,D))
-    fn create_test_tree() -> Tree {
-        let leaf_a = Node::new(Some("A".to_string()), Some(0.1));
-        let leaf_b = Node::new(Some("B".to_string()), Some(0.2));
-        let leaf_c = Node::new(Some("C".to_string()), Some(0.3));
-        let leaf_d = Node::new(Some("D".to_string()), Some(0.4));
-
-        let mut internal1 = Node::new(None, Some(0.5));
-        internal1.children = vec![leaf_a, leaf_b];
-
-        let mut internal2 = Node::new(None, Some(0.6));
-        internal2.children = vec![leaf_c, leaf_d];
-
-        let mut root = Node::new(None, None);
-        root.children = vec![internal1, internal2];
-
-        Tree { root }
-    }
-
-    // Helper function to create another test tree: ((A,C),(B,D))
-    fn create_alternative_tree() -> Tree {
-        let leaf_a = Node::new(Some("A".to_string()), Some(0.15));
-        let leaf_c = Node::new(Some("C".to_string()), Some(0.25));
-        let leaf_b = Node::new(Some("B".to_string()), Some(0.35));
-        let leaf_d = Node::new(Some("D".to_string()), Some(0.45));
-
-        let mut internal1 = Node::new(None, Some(0.55));
-        internal1.children = vec![leaf_a, leaf_c];
-
-        let mut internal2 = Node::new(None, Some(0.65));
-        internal2.children = vec![leaf_b, leaf_d];
-
-        let mut root = Node::new(None, None);
-        root.children = vec![internal1, internal2];
-
-        Tree { root }
-    }
-
     #[test]
     fn test_clade_creation() {
         let clade = Clade::new(
@@ -425,5 +384,42 @@ mod tests {
         assert_eq!(left_internal.children.len(), 2);
         assert_eq!(right_internal.length, Some(0.6));
         assert_eq!(right_internal.children.len(), 2);
+    }
+
+    #[test]
+    fn test_subset_checking_performance() {
+        let small_clade = Clade::new(vec!["A".to_string(), "B".to_string()], None);
+        let large_set = (0..1000)
+            .map(|i| format!("taxon_{}", i))
+            .collect::<Vec<_>>();
+        let mut large_set_with_ab = large_set.clone();
+        large_set_with_ab.extend(vec!["A".to_string(), "B".to_string()]);
+        large_set_with_ab.sort();
+
+        // This should be much faster than HashSet-based checking
+        assert!(small_clade.is_subset_of_sorted(&large_set_with_ab));
+        assert!(!small_clade.is_subset_of_sorted(&large_set));
+    }
+
+    #[test]
+    fn test_optimized_tree_building() {
+        let clades = vec![
+            Clade::new(vec!["A".to_string()], Some(0.1)),
+            Clade::new(vec!["B".to_string()], Some(0.2)),
+            Clade::new(vec!["C".to_string()], Some(0.3)),
+            Clade::new(vec!["A".to_string(), "B".to_string()], Some(0.5)),
+            Clade::new(
+                vec!["A".to_string(), "B".to_string(), "C".to_string()],
+                Some(0.8),
+            ),
+        ];
+
+        let all_leaves = vec!["A".to_string(), "B".to_string(), "C".to_string()];
+        let tree = build_tree_from_clades(&all_leaves, &clades);
+
+        println!("Optimized tree: {}", tree.to_newick());
+
+        // Should produce: ((A:0.1,B:0.2):0.5,C:0.3):0.8;
+        assert_eq!(tree.root.children.len(), 2); // AB subtree and C
     }
 }
