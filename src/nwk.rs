@@ -11,7 +11,10 @@
 /// to read node of a tree (into `Node` struct) and clade of a tree (into `Clade` struct).
 ///
 ///
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    str::Chars,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Clade {
@@ -110,10 +113,9 @@ pub struct Tree {
 
 impl Tree {
     pub fn from_newick(s: &str) -> Result<Self, String> {
-        let chars: Vec<char> = s.chars().collect();
-        let mut pos = 0;
-        let root = parse_subtree(&chars, &mut pos)?;
-        Ok(Self { root })
+        let mut chars = s.chars().peekable();
+        let root = parse_subtree(&mut chars)?;
+        Ok(Tree { root })
     }
 
     pub fn to_newick(&self) -> String {
@@ -121,96 +123,99 @@ impl Tree {
     }
 }
 
-fn parse_subtree(chars: &[char], pos: &mut usize) -> Result<Node, String> {
-    skip_whitespace(chars, pos);
+fn parse_subtree(chars: &mut std::iter::Peekable<Chars>) -> Result<Node, String> {
+    // internal node
+    if let Some('(') = chars.peek() {
+        // first, consume the '('
+        chars.next();
+        let mut children = Vec::new();
 
-    if *pos >= chars.len() {
-        return Err("Unexpected end of string".into());
-    }
-
-    let mut node = Node::new(None, None);
-
-    if chars[*pos] == '(' {
-        // internal node
-        *pos += 1; // skip '('
         loop {
-            let child = parse_subtree(chars, pos)?;
-            node.children.push(child);
+            let child = parse_subtree(chars)?;
+            children.push(child);
 
-            skip_whitespace(chars, pos);
-            if chars.get(*pos) == Some(&',') {
-                *pos += 1; // skip comma
-            } else {
-                break;
-            }
-        }
-        if chars.get(*pos) != Some(&')') {
-            return Err("Expected ')'".into());
-        }
-        *pos += 1; // skip ')'
-                   // internal node label
-        skip_whitespace(chars, pos);
-        if *pos < chars.len() {
-            if let Some(c) = chars.get(*pos) {
-                if !matches!(c, ':' | ',' | ')' | ';') {
-                    let label = parse_name(chars, pos);
-                    if !label.is_empty() {
-                        node.name = Some(label);
-                    }
+            match chars.peek() {
+                Some(',') => {
+                    // consume ','
+                    chars.next();
+                }
+                Some(')') => {
+                    // consume ')'
+                    chars.next();
+                    break;
+                }
+                other => {
+                    return Err(format!(
+                        "Unexpected character in internal node: {:?}",
+                        other
+                    ));
                 }
             }
         }
+
+        // optional branch length
+        let length = if let Some(':') = chars.peek() {
+            // consume ':'
+            chars.next();
+            Some(parse_branch_length(chars)?)
+        } else {
+            None
+        };
+
+        Ok(Node {
+            name: None,
+            length,
+            children,
+        })
     } else {
         // leaf node
-        let name = parse_name(chars, pos);
-        node.name = Some(name);
+        let name = parse_name(chars)?;
+        let length = if let Some(':') = chars.peek() {
+            // consume ':'
+            chars.next();
+            Some(parse_branch_length(chars)?)
+        } else {
+            None
+        };
+
+        Ok(Node {
+            name: Some(name),
+            length,
+            children: Vec::new(),
+        })
     }
-
-    // optional branch length
-    skip_whitespace(chars, pos);
-    if chars.get(*pos) == Some(&':') {
-        *pos += 1; // skip ':'
-        let len_str = parse_branch_length(chars, pos);
-        node.length = len_str.parse::<f64>().ok();
-    }
-
-    skip_whitespace(chars, pos);
-
-    Ok(node)
 }
 
-fn parse_name(chars: &[char], pos: &mut usize) -> String {
-    let mut name = String::new();
-    while *pos < chars.len() {
-        match chars[*pos] {
-            ':' | ',' | ')' | '(' | ';' => break,
-            c => {
-                name.push(c);
-                *pos += 1;
-            }
+fn parse_name(chars: &mut std::iter::Peekable<Chars>) -> Result<String, String> {
+    let mut buf = String::new();
+    let unwanted = [':', ',', ')', '(', ';'];
+    while let Some(&c) = chars.peek() {
+        if unwanted.iter().any(|x| *x == c) {
+            break;
+        }
+        buf.push(c);
+        chars.next();
+    }
+    if buf.is_empty() {
+        Err("Expected node name".into())
+    } else {
+        Ok(buf)
+    }
+}
+
+fn parse_branch_length(chars: &mut std::iter::Peekable<Chars>) -> Result<f64, String> {
+    let mut buf = String::new();
+    let unwanted = ['.', '-', 'e', 'E'];
+    while let Some(&c) = chars.peek() {
+        if c.is_ascii_digit() || unwanted.iter().any(|x| *x == c) {
+            buf.push(c);
+            chars.next();
+        } else {
+            break;
         }
     }
-    name.trim().to_string()
-}
-
-fn parse_branch_length(chars: &[char], pos: &mut usize) -> String {
-    let mut num = String::new();
-    while *pos < chars.len() {
-        match chars[*pos] {
-            ',' | ')' | ';' => break,
-            c => {
-                num.push(c);
-                *pos += 1;
-            }
-        }
-    }
-    num.trim().to_string()
-}
-
-fn skip_whitespace(chars: &[char], pos: &mut usize) {
-    while *pos < chars.len() && chars[*pos].is_whitespace() {
-        *pos += 1;
-    }
+    buf.parse::<f64>()
+        .map_err(|e| format!("Invalid number: {}", e))
 }
 
 /// Recursively build a tree from clades

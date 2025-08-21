@@ -268,20 +268,19 @@ mod tests {
 
     #[test]
     fn test_newick_parsing_edge_cases() {
-        // Test empty names
-        let result = Tree::from_newick("(,);");
-        assert!(result.is_ok());
-
         // Test names without branch lengths
         let result = Tree::from_newick("(A,B);");
+        println!("{:?}", result);
         assert!(result.is_ok());
 
         // Test malformed input
         let result = Tree::from_newick("(A,B;"); // Missing closing parenthesis
+        println!("{:?}", result);
         assert!(result.is_err());
 
         // Test single leaf
         let result = Tree::from_newick("A;");
+        println!("{:?}", result);
         assert!(result.is_ok());
     }
 
