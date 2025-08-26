@@ -5,8 +5,8 @@
 
 use std::{
     collections::HashMap,
-    fs::{self},
-    io::Write,
+    fs::{self, File},
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
 };
 
@@ -15,6 +15,7 @@ use finch::{
     serialization::{Sketch, SketchDistance},
 };
 use itertools::Itertools;
+use rayon::prelude::*;
 use speedytree::DistanceMatrix;
 
 /// Compute distance between sketches
@@ -24,7 +25,8 @@ pub fn compute_distances(sketches: Vec<Sketch>) -> Vec<SketchDistance> {
         .combinations_with_replacement(2)
         .filter_map(|pair| {
             let dist = distance(&pair[0], &pair[1], false).ok()?;
-            (dist.mash_distance <= 1.0).then_some(dist)
+            // early validation to avoid storing invalid distance
+            (dist.mash_distance <= 1.0 && dist.mash_distance >= 0.0).then_some(dist)
         })
         .collect()
 }
