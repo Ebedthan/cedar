@@ -4,6 +4,7 @@ use std::fs::{self, File};
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::{self, Write};
+use std::path::Path;
 use std::sync::Once;
 
 static INIT_RAYON: Once = Once::new();
@@ -34,9 +35,11 @@ pub fn manage_tempdir(
     keep: bool,
     matrix: &speedytree::DistanceMatrix,
     tempdir: &str,
+    append: bool,
 ) -> anyhow::Result<()> {
     if keep {
-        dist::to_phylip(matrix.clone(), tempdir)
+        let p = Path::new(tempdir);
+        dist::to_phylip(&matrix, &p, append)
     } else {
         fs::remove_dir_all(tempdir)?;
         Ok(())

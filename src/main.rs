@@ -137,7 +137,7 @@ fn main() -> anyhow::Result<()> {
                 utils::output_tree(args.output, newick)?;
 
                 // Manage tempdir and tempfiles
-                utils::manage_tempdir(args.keep, &matrix, &args.tempdir)?;
+                utils::manage_tempdir(args.keep, &matrix, &args.tempdir, true)?;
             }
         }
         Commands::Compare(args) => {

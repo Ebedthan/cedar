@@ -7,7 +7,7 @@ use std::{
     collections::HashMap,
     fs::{self, File},
     io::{BufWriter, Write},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 use finch::{
@@ -15,14 +15,17 @@ use finch::{
     serialization::{Sketch, SketchDistance},
 };
 use itertools::Itertools;
-use rayon::prelude::*;
 use speedytree::DistanceMatrix;
 
 /// Compute distance between sketches
+/// Uses rayon for parallel processing
 pub fn compute_distances(sketches: Vec<Sketch>) -> Vec<SketchDistance> {
+    use rayon::prelude::*;
     sketches
         .into_iter()
         .combinations_with_replacement(2)
+        .collect::<Vec<_>>() // collect combinations first
+        .into_par_iter() // then parallelize distance computation
         .filter_map(|pair| {
             let dist = distance(&pair[0], &pair[1], false).ok()?;
             // early validation to avoid storing invalid distance
@@ -33,65 +36,95 @@ pub fn compute_distances(sketches: Vec<Sketch>) -> Vec<SketchDistance> {
 
 /// Computes a distance matrice from a list of sketches distances
 pub fn distance_to_matrix(distances: Vec<SketchDistance>) -> DistanceMatrix {
-    // SketchDistance contains more data than needed for this task like
-    // containment, jaccard distance, etc.
-    // So I initialise a Vec to store only the needed data from SketchDistance
-    // needed data: query name, reference name, mash distance
-    let mut map: HashMap<(String, String), f64> = HashMap::new();
-
-    for distance in distances {
-        let query_basename = Path::new(&distance.query)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
-        let ref_basename = Path::new(&distance.reference)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
-        map.insert((query_basename, ref_basename), distance.mash_distance);
+    if distances.is_empty() {
+        return DistanceMatrix {
+            matrix: vec![],
+            names: vec![],
+        };
     }
 
-    // Collect unique names
-    let unique_names: Vec<String> = map.keys().map(|(q, _)| q.clone()).unique().collect();
-    let n = unique_names.len();
+    // Step 1: extract and deduplicate names efficiently
+    let mut name_to_index: HashMap<String, usize> = HashMap::new();
+    let mut names = Vec::new();
 
-    // Initialize N x N matrix with zeros
+    for dist in &distances {
+        let query_basename = extract_basename(&dist.query);
+        let ref_basename = extract_basename(&dist.reference);
+
+        for basename in [query_basename, ref_basename] {
+            if !name_to_index.contains_key(&basename) {
+                let index = names.len();
+                name_to_index.insert(basename.clone(), index);
+                names.push(basename);
+            }
+        }
+    }
+
+    let n = names.len();
     let mut matrix = vec![vec![0.0; n]; n];
 
-    // Fill the matrix using precomputed distances
-    // Hold on! Here something is happening. First the SketchDistance struct (distances)
-    // DOES NOT CONTAINS all pairwise distances but only non repeating
-    // distances. However, the [speedytree] NJ trees functions uses
-    // a N x N matrix. So to create this matrix, I generate all the combinations
-    // using a cartesian product and then fill the matrix.
-    for (i, j) in (0..n).cartesian_product(0..n) {
-        matrix[i][j] = *map
-            .get(&(unique_names[i].clone(), unique_names[j].clone()))
-            .or_else(|| map.get(&(unique_names[j].clone(), unique_names[i].clone())))
-            .unwrap_or(&0.0);
+    // step 2: fill matrix using index lookups
+    // Hope to have found a better way to fill the matrix which should also be much faster
+    for dist in distances {
+        let query_basename = extract_basename(&dist.query);
+        let ref_basename = extract_basename(&dist.reference);
+
+        if let (Some(&i), Some(&j)) = (
+            name_to_index.get(&query_basename),
+            name_to_index.get(&ref_basename),
+        ) {
+            // create the symmetric (n x n) matrix
+            matrix[i][j] = dist.mash_distance;
+            matrix[j][i] = dist.mash_distance;
+        }
     }
 
-    DistanceMatrix {
-        matrix,
-        names: unique_names,
-    }
+    DistanceMatrix { matrix, names }
+}
+
+/// Cached basename extraction
+fn extract_basename(path: &str) -> String {
+    Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string()
 }
 
 /// Write a PHYLIP file from a distance matrice
-pub fn to_phylip(dist: DistanceMatrix, output: &str) -> anyhow::Result<()> {
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(PathBuf::from(output).join("distance.phylip"))?;
+pub fn to_phylip(dist: &DistanceMatrix, output: &Path, append: bool) -> anyhow::Result<()> {
+    let phylip_path = output.join("distance.phylip");
 
-    writeln!(file, "{}", dist.names.len())?;
+    let file = if append {
+        fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&phylip_path)?
+    } else {
+        File::create(&phylip_path)?
+    };
+
+    let mut writer = BufWriter::new(file);
+
+    // write header
+    writeln!(writer, "{}", dist.names.len())?;
+
+    // pre-allocate string buffer and reuse
+    let mut line_buffer = String::with_capacity(dist.names.len() * 12);
 
     for (name, row) in dist.names.iter().zip(&dist.matrix) {
-        writeln!(file, "{} {}", name, row.iter().format(" "))?;
+        line_buffer.clear();
+        line_buffer.push_str(name);
+        line_buffer.push(' ');
+        for (i, &value) in row.iter().enumerate() {
+            if i > 0 {
+                line_buffer.push(' ');
+            }
+            line_buffer.push_str(&format!("{:.6}", value));
+        }
+        writeln!(writer, "{}", line_buffer)?;
     }
-
+    writer.flush()?;
     Ok(())
 }
 
@@ -183,13 +216,14 @@ mod tests {
 
         // Create a temporary directory for testing
         let temp_dir = tempfile::tempdir().unwrap();
-        let temp_dir_path = temp_dir.path().to_str().unwrap().to_string();
+        let temp_dir_path = temp_dir.path();
 
-        let result = to_phylip(dist.clone(), &temp_dir_path);
+        let result = to_phylip(&dist, &temp_dir_path, true);
         assert!(result.is_ok());
 
         // Verify that the output file is created
-        let mut file = std::fs::File::open(format!("{}/distance.phylip", temp_dir_path)).unwrap();
+        let mut file =
+            std::fs::File::open(format!("{}/distance.phylip", temp_dir_path.display())).unwrap();
         let mut contents = String::new();
         file.read_to_string(&mut contents).unwrap();
 
