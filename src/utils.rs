@@ -138,6 +138,17 @@ pub fn format_genome_size(size: usize) -> String {
     format!("{} {}", actual, approx)
 }
 
+/// Detect influential genome's size.
+/// If the set of submitted genomes is less than 4, then use
+/// the leave-one-out mean impact method, else use the IQR method.
+/// If impactᵢ < ε × μ  → negligible.
+///
+/// **Inputs:**
+///     - `data`: a vec of tupe containing the genome ID and size.
+///     - `epsilon`: relative threshold which will be used by multiplying it to the mean (epsilon * meean)
+///
+/// **Output:** a vec of tuple similar to `data` containing the outliers.
+///
 pub fn detect_outliers(
     data: &Vec<(String, usize)>,
     epsilon: f64,
