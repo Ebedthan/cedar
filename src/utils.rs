@@ -39,7 +39,7 @@ pub fn manage_tempdir(
 ) -> anyhow::Result<()> {
     if keep {
         let p = Path::new(tempdir);
-        dist::to_phylip(&matrix, &p, append)
+        dist::to_phylip(matrix, p, append)
     } else {
         fs::remove_dir_all(tempdir)?;
         Ok(())
