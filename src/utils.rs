@@ -130,7 +130,7 @@ pub fn compute_genome_stats(filenames: &[String]) -> anyhow::Result<Vec<(String,
 
     let stats: Vec<(String, usize)> = filenames
         .par_iter()
-        .map(|f| helper(f))
+        .map(helper)
         .collect::<anyhow::Result<_>>()?;
 
     // print stats
@@ -220,8 +220,8 @@ pub fn check_genome_outliers(data: &[(String, usize)], epsilon: f64) -> anyhow::
                 outlier.0,
                 format_genome_size(outlier.1)
             );
-            process::exit(1);
         }
+        process::exit(1);
     }
 
     Ok(())
