@@ -120,7 +120,7 @@ pub fn to_phylip(dist: &DistanceMatrix, output: &Path, append: bool) -> anyhow::
             if i > 0 {
                 line_buffer.push(' ');
             }
-            line_buffer.push_str(&format!("{:.6}", value));
+            line_buffer.push_str(&format!("{}", value));
         }
         writeln!(writer, "{}", line_buffer)?;
     }

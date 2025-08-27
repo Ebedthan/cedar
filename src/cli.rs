@@ -54,7 +54,7 @@ pub struct BuildArgs {
 
     /// Boostrap replicates
     #[arg(short, value_name = "INT")]
-    pub bootstrap: Option<u32>,
+    pub bootstrap: Option<usize>,
 
     /// Sketch size
     #[arg(

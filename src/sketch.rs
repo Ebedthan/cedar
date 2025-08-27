@@ -6,10 +6,14 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
+use crate::cli;
+use finch::serialization::Sketch;
 use finch::{
     errors::FinchResult, filtering::FilterParams, serialization::write_mash_file, sketch_files,
     sketch_schemes::SketchParams,
 };
+use rayon::iter::IntoParallelIterator;
+use rayon::prelude::*;
 
 /// Compute the value of k that minimizes the probability of
 /// observing a random k-mer.
@@ -62,6 +66,35 @@ pub fn create_sketches(
             Ok(out_path.to_string_lossy().into_owned())
         })
         .collect()
+}
+
+pub fn create_and_load_sketches(
+    args: &cli::BuildArgs,
+    kmer_size: u8,
+) -> anyhow::Result<Vec<Sketch>> {
+    // Create sketches
+    let sketches_path = create_sketches(
+        &args.input,
+        kmer_size,
+        args.size,
+        args.oversketch,
+        args.seed,
+        &args.tempdir,
+    )?;
+
+    // Load sketches in parallel
+    let sketches: Vec<Sketch> = sketches_path
+        .into_par_iter()
+        .try_fold(Vec::new, |mut acc, path| -> anyhow::Result<Vec<Sketch>> {
+            let mut batch = finch::open_sketch_file(path)?;
+            acc.append(&mut batch);
+            Ok(acc)
+        })
+        .try_reduce(Vec::new, |mut acc, mut batch| {
+            acc.append(&mut batch);
+            Ok(acc)
+        })?;
+    Ok(sketches)
 }
 
 #[cfg(test)]

@@ -1,10 +1,14 @@
+use crate::cli;
 use crate::dist;
+use crate::sketch;
+use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 use std::fs::{self, File};
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::{self, Write};
 use std::path::Path;
+use std::process;
 use std::sync::Once;
 
 static INIT_RAYON: Once = Once::new();
@@ -96,31 +100,45 @@ pub fn is_multi_fasta(path: &str) -> bool {
 ///
 /// **Output**: a `anyhow::Result` of tuple of String (sequence id) and usize (sequence size).
 ///
-pub fn get_seq_stats(path: &str) -> anyhow::Result<(String, usize)> {
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
+pub fn compute_genome_stats(filenames: &[String]) -> anyhow::Result<Vec<(String, usize)>> {
+    fn helper(path: &String) -> anyhow::Result<(String, usize)> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
 
-    let mut total_len = 0;
-    let mut id = String::new();
-    for line in reader.lines() {
-        let line = line?;
-        let trimmed = line.trim();
+        let mut total_len = 0;
+        let mut id = String::new();
+        for line in reader.lines() {
+            let line = line?;
+            let trimmed = line.trim();
 
-        if trimmed.is_empty() {
-            continue;
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            if let Some(stripped) = trimmed.strip_prefix('>') {
+                let tmp_id = stripped
+                    .split_whitespace()
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("Malformed fasta header: {}", trimmed))?;
+                id = tmp_id.to_string();
+            } else {
+                total_len += trimmed.len();
+            }
         }
-
-        if let Some(stripped) = trimmed.strip_prefix('>') {
-            let tmp_id = stripped
-                .split_whitespace()
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("Malformed fasta header: {}", trimmed))?;
-            id = tmp_id.to_string();
-        } else {
-            total_len += trimmed.len();
-        }
+        Ok((id, total_len))
     }
-    Ok((id, total_len))
+
+    let stats: Vec<(String, usize)> = filenames
+        .par_iter()
+        .map(|f| helper(f))
+        .collect::<anyhow::Result<_>>()?;
+
+    // print stats
+    for stat in &stats {
+        println!("Genome: {}, size: {}", stat.0, format_genome_size(stat.1));
+    }
+
+    Ok(stats)
 }
 
 pub fn format_genome_size(size: usize) -> String {
@@ -152,11 +170,8 @@ pub fn format_genome_size(size: usize) -> String {
 ///
 /// **Output:** a vec of tuple similar to `data` containing the outliers.
 ///
-pub fn detect_outliers(
-    data: &Vec<(String, usize)>,
-    epsilon: f64,
-) -> anyhow::Result<Vec<(String, usize)>> {
-    let mut outliers = Vec::new();
+pub fn check_genome_outliers(data: &[(String, usize)], epsilon: f64) -> anyhow::Result<()> {
+    let mut outliers = Vec::with_capacity(data.len());
     if data.len() < 4 {
         // Use leave-one-out mean impact method
         let values: Vec<f64> = data.iter().map(|x| x.1 as f64).collect();
@@ -197,12 +212,24 @@ pub fn detect_outliers(
             .collect();
     }
 
-    Ok(outliers)
+    if !outliers.is_empty() {
+        eprintln!("Error: outliers detected in genome sizes");
+        for outlier in outliers {
+            eprintln!(
+                "Genome {} with size {} will negatively influence k selection",
+                outlier.0,
+                format_genome_size(outlier.1)
+            );
+            process::exit(1);
+        }
+    }
+
+    Ok(())
 }
 
 pub fn validate_inputs(filenames: &[String]) -> anyhow::Result<()> {
     if filenames.len() < 3 {
-        anyhow::bail!("At least three input FASTA files must be provided.");
+        anyhow::bail!("Input validation error: At least three input FASTA files must be provided.");
     }
 
     let mut invalid = vec![];
@@ -218,19 +245,36 @@ pub fn validate_inputs(filenames: &[String]) -> anyhow::Result<()> {
 
     if !invalid.is_empty() {
         anyhow::bail!(
-            "Only FASTA files are allowed. Invalid files: {}",
+            "Input validation error: Only FASTA files are allowed. Invalid files: {}",
             invalid.join(", ")
         );
     }
 
     if !multi_seq.is_empty() {
         anyhow::bail!(
-            "Only single-sequence FASTA files are allowed. Multi-sequence files: {}",
+            "Input validation error: Only single-sequence FASTA files are allowed. Multi-sequence files: {}",
             multi_seq.join(", ")
         );
     }
 
     Ok(())
+}
+
+pub fn determine_kmer_size(args: &cli::BuildArgs, stats: &[(String, usize)]) -> u8 {
+    if let Some(km) = args.kmer {
+        println!("User-defined k-mer size: {}", km);
+        km
+    } else {
+        let mean_genome_size =
+            (stats.iter().map(|x| x.1 as u64).sum::<u64>() / stats.len() as u64) as u32;
+        let kmer_size = sketch::k_computing(mean_genome_size, 0.01);
+        println!(
+            "Computed k-mer size (mean genome size: {}, probability: 0.01): {}",
+            format_genome_size(mean_genome_size as usize),
+            kmer_size
+        );
+        kmer_size
+    }
 }
 
 #[cfg(test)]

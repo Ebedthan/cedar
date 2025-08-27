@@ -3,9 +3,15 @@
 // This file may not be copied, modified, or distributed except according
 // to those terms.
 
-use crate::nwk::{build_tree_from_clades, Clade, Node, Tree};
+use crate::{
+    cli,
+    dist::{self, ComputeTree, TreeAlgorithm},
+    nwk::{build_tree_from_clades, Clade, Node, Tree},
+    utils,
+};
 use finch::serialization::Sketch;
 use rand::{rng, seq::IndexedRandom};
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 /// Majority rule: keep clades occurring >= threshold times
@@ -116,6 +122,44 @@ pub fn sample_sketches_with_replacement(sketches: Vec<Sketch>, sample_size: usiz
     }
 
     bootstraped
+}
+
+pub fn build_bootstrap_tree(
+    sketches: Vec<Sketch>,
+    reps: usize,
+    tree_algorithm: &TreeAlgorithm,
+    output: Option<String>,
+) -> anyhow::Result<()> {
+    let trees: anyhow::Result<Vec<Tree>> = (0..reps)
+        .into_par_iter()
+        .map(|_| -> anyhow::Result<Tree> {
+            let tmp_sketches = sample_sketches_with_replacement(sketches.clone(), 1000);
+            let tmp_distance = dist::compute_distances(tmp_sketches);
+            let tmp_matrix = dist::distance_to_matrix(tmp_distance);
+            let tmp_tree_newick = tmp_matrix.compute_newick_tree(tree_algorithm)?;
+            Tree::from_newick(&tmp_tree_newick)
+                .map_err(|e| anyhow::anyhow!("Tree parsing error: {}", e))
+        })
+        .collect();
+
+    let trees = trees?;
+    let consensus_tree = build_consensus(trees, reps);
+    utils::output_tree(output, consensus_tree.to_newick())
+}
+
+pub fn build_single_tree(
+    sketches: Vec<Sketch>,
+    tree_algorithm: &TreeAlgorithm,
+    args: &cli::BuildArgs,
+) -> anyhow::Result<()> {
+    let sketch_distance = dist::compute_distances(sketches);
+    let matrix = dist::distance_to_matrix(sketch_distance);
+    let newick = matrix.compute_newick_tree(tree_algorithm)?;
+
+    utils::output_tree(args.output.clone(), newick)?;
+    utils::manage_tempdir(args.keep, &matrix, &args.tempdir, true)?;
+
+    Ok(())
 }
 
 #[cfg(test)]
