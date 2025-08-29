@@ -7,8 +7,8 @@ use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "darwin",
-    about = "Compute (rapid) neighbor joining tree from sequences",
+    name = "cedar",
+    about = "a phylogenomic toolkit",
     author,
     version,
     arg_required_else_help = true

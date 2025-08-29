@@ -1,4 +1,4 @@
-# cedar
+# cedar: from genomes to trees, simplified.
 
 [![CI](https://github.com/Ebedthan/cedar/actions/workflows/ci.yml/badge.svg)](https://github.com/Ebedthan/cedar/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/Ebedthan/cedar/graph/badge.svg?token=S3OLFFHF4X)](https://codecov.io/gh/Ebedthan/cedar)
@@ -7,39 +7,38 @@
 
 ## 🗺️ Overview
 
-`cedar` is a fast tool to build (rapid) neighbor-joining trees bases on mash distance.
-It takes as input the sequences (FASTA and FASTQ files are welcomed, compressed or not), compute the sketches and output a newick file of the tree.
+`cedar` is a fast, portable, and reproducible toolkit for phylogenomics, written in pure Rust.
+It streamlines the reconstruction and comparison of species trees from whole genomes or sets of orthologous groups.
+With sensible defaults, parallel execution, and a clean CLI, Cedar is designed to be as easy to use for biologists as it is powerful for computational phylogeneticists.
 
-The main advantages of cedar over others tools are:
-- It uses the innovative approach of sketching algorithm [finch](https://github.com/onecodex/finch-rs) which is fast, have adaptive, count-based filtering (for FASTQs) and strandedness filtering.
-- Reliable and fast neighbor-joining tree estimation using [speedytree](https://docs.rs/speedytree/latest/speedytree/).
+## 🌲 Cedar Roadmap
+### ✅ Core v1.0
 
-`cedar` outputs the tree in newick format.
-
-## 🔧 Installing
-
-```
-git clone https://github.com/Ebedthan/cedar.git
-cd cedar
-
-# if default Rust install directory is ~/.cargo
-cargo install --path . --root ~/.cargo
-cedar -h
-```
-
-## 💡 Examples
-
-```
-# Compute rapid neighbor-joining tree of all files in a directory
-cedar dir/*
-
-# Compute rapid NJ tree using specific files
-cedar file1.fa.gz file2.fq.xz file3.fna.bz2
-
-# Compute canonical neighbor-joining tree
-cedar -c dir/*
-```
-Full help is available from `cedar --help`;
+- **Input handling**
+  - Accept genome FASTA files (.fa/.fna/.faa, compressed or uncompressed).
+  - Accept orthologous group FASTAs (OMA, OrthoFinder, BUSCO outputs).
+  - Transparent handling of compressed inputs (.gz, .bz2, .xz).
+- **Supermatrix workflow**
+  - Multiple sequence alignment (MAFFT wrapper).
+  - Concatenate per-locus alignments into a supermatrix.
+  - Generate partition files for downstream ML tree inference.
+  - Handle missing data (gap padding, min. occupancy thresholds).
+- **Tree building**
+  - Distance-based tree inference using Mash.
+  - Wrapper for IQ-TREE and FastTree.
+  - Support user-defined model options.
+- **Tree comparison**
+  - Robinson-Foulds distance.
+  - Leaf reconciliation (ignore taxa missing in one tree).
+- **CLI design**
+  - Subcommands:
+    - cedar build → build species trees.
+    - cedar compare → compare two trees.
+  - Smart defaults (auto-detect dataset size for MAFFT mode, etc.).
+  - Clear progress bars and logging.
+- **Reproducibility**
+  - Output manifest (YAML/JSON) with command-line options, versions, and seeds.
+  - Deterministic runs by default.
 
 ### Minimum supported Rust version
 `cedar` minimum [Rust](https://www.rust-lang.org/) version is 1.74.1.
