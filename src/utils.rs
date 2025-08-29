@@ -3,9 +3,9 @@
 // This file may not be copied, modified, or distributed except according
 // to those terms.
 
+use crate::build::dist;
+use crate::build::sketch;
 use crate::cli;
-use crate::dist;
-use crate::sketch;
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 use std::fs::{self, File};

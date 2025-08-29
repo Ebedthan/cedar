@@ -15,16 +15,16 @@ With sensible defaults, parallel execution, and a clean CLI, Cedar is designed t
 ### ✅ Core v1.0
 
 - **Input handling**
-  - Accept genome FASTA files (.fa/.fna/.faa, compressed or uncompressed).
+  - Accept genome FASTA files (.fa/.fna/.faa, compressed or uncompressed) [✅].
   - Accept orthologous group FASTAs (OMA, OrthoFinder, BUSCO outputs).
-  - Transparent handling of compressed inputs (.gz, .bz2, .xz).
+  - Transparent handling of compressed inputs (.gz, .bz2, .xz) [✅].
 - **Supermatrix workflow**
   - Multiple sequence alignment (MAFFT wrapper).
   - Concatenate per-locus alignments into a supermatrix.
   - Generate partition files for downstream ML tree inference.
   - Handle missing data (gap padding, min. occupancy thresholds).
 - **Tree building**
-  - Distance-based tree inference using Mash.
+  - Distance-based tree inference using Mash distance [✅].
   - Wrapper for IQ-TREE and FastTree.
   - Support user-defined model options.
 - **Tree comparison**

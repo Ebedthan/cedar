@@ -36,20 +36,24 @@ pub enum Commands {
 }
 #[derive(Args, Debug)]
 pub struct BuildArgs {
-    /// Fasta file(s) to build trees [suports .gz, .xz, .bz2]
-    #[arg(required = true)]
-    pub input: Vec<String>,
+    /// Genomes FASTA files to build tree [suports .gz, .xz, .bz2]
+    #[arg(long)]
+    pub genomes: Vec<String>,
+
+    /// Directory of orthologous groups FASTA files
+    #[arg(long)]
+    pub groups: Vec<String>,
 
     /// Output tree (Newick format) to FILE
     #[arg(short, value_name = "FILE")]
     pub output: Option<String>,
 
-    /// Keep sketches and distance files
+    /// Keep intermediate files
     #[arg(short = 'K')]
     pub keep: bool,
 
     /// Temporary directory name
-    #[arg(long, value_name = "DIR", default_value_t = String::from("cedar_tmp"))]
+    #[arg(long, value_name = "DIR", default_value_t = String::from("cedar_results"))]
     pub tempdir: String,
 
     /// Boostrap replicates

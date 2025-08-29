@@ -3,11 +3,9 @@
 // This file may not be copied, modified, or distributed except according
 // to those terms.
 
-pub mod bootstrap;
+pub mod build;
 pub mod cli;
-pub mod dist;
 pub mod nwk;
-pub mod sketch;
 pub mod utils;
 
 use clap::Parser;
@@ -16,10 +14,10 @@ use std::fs;
 use anyhow::{Context, Result};
 
 use crate::{
-    bootstrap::{build_bootstrap_tree, build_single_tree},
+    build::bootstrap::{build_bootstrap_tree, build_single_tree},
+    build::dist::TreeAlgorithm,
+    build::sketch::create_and_load_sketches,
     cli::Commands,
-    dist::TreeAlgorithm,
-    sketch::create_and_load_sketches,
     utils::{check_genome_outliers, compute_genome_stats, determine_kmer_size, init_rayon_pool},
 };
 
@@ -35,10 +33,10 @@ fn main() -> Result<()> {
 
 fn build_command(args: cli::BuildArgs, threads: usize) -> Result<()> {
     // Validate inputs early
-    utils::validate_inputs(&args.input)?;
+    utils::validate_inputs(&args.genomes)?;
 
     // Compute genome statistics in parallel
-    let stats = compute_genome_stats(&args.input)?;
+    let stats = compute_genome_stats(&args.genomes)?;
 
     // Check for genome outliers and exit early if found
     check_genome_outliers(&stats, 0.01)?;

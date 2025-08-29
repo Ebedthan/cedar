@@ -4,8 +4,8 @@
 // to those terms.
 
 use crate::{
+    build::dist::{self, ComputeTree, TreeAlgorithm},
     cli,
-    dist::{self, ComputeTree, TreeAlgorithm},
     nwk::{build_tree_from_clades, Clade, Node, Tree},
     utils,
 };
