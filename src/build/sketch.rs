@@ -74,7 +74,7 @@ pub fn create_and_load_sketches(
 ) -> anyhow::Result<Vec<Sketch>> {
     // Create sketches
     let sketches_path = create_sketches(
-        &args.genomes,
+        args.genomes.as_ref().unwrap(),
         kmer_size,
         args.size,
         args.oversketch,

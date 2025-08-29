@@ -9,16 +9,13 @@ pub mod nwk;
 pub mod utils;
 
 use clap::Parser;
-use std::fs;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use crate::{
-    build::bootstrap::{build_bootstrap_tree, build_single_tree},
-    build::dist::TreeAlgorithm,
-    build::sketch::create_and_load_sketches,
+    build::{build_tree_from_genomes, build_tree_from_orthologous_groups},
     cli::Commands,
-    utils::{check_genome_outliers, compute_genome_stats, determine_kmer_size, init_rayon_pool},
+    utils::init_rayon_pool,
 };
 
 fn main() -> Result<()> {
@@ -26,43 +23,14 @@ fn main() -> Result<()> {
     init_rayon_pool(cli.threads);
 
     match cli.command {
-        Commands::Build(args) => build_command(args, cli.threads),
+        Commands::Build(args) => {
+            if let Some(_) = args.genomes {
+                build_tree_from_genomes(&args, cli.threads)
+            } else {
+                build_tree_from_orthologous_groups(&args, cli.threads)
+            }
+        }
         Commands::Compare(args) => compare_command(args),
-    }
-}
-
-fn build_command(args: cli::BuildArgs, threads: usize) -> Result<()> {
-    // Validate inputs early
-    utils::validate_inputs(&args.genomes)?;
-
-    // Compute genome statistics in parallel
-    let stats = compute_genome_stats(&args.genomes)?;
-
-    // Check for genome outliers and exit early if found
-    check_genome_outliers(&stats, 0.01)?;
-
-    // Determine k-mer size
-    let kmer_size = determine_kmer_size(&args, &stats);
-
-    // Set bootstrap replicates
-    let reps = args.bootstrap.unwrap_or(100);
-    if args.bootstrap.is_some() {
-        println!("Boostrap replicated: {}", reps);
-    }
-
-    // Create temp directory
-    fs::create_dir_all(&args.tempdir)
-        .with_context(|| format!("Could not create temp directory: {}", &args.tempdir))?;
-
-    // Create sketches
-    let sketches = create_and_load_sketches(&args, kmer_size)?;
-
-    let tree_algorithm = TreeAlgorithm::from_cli(args.canonical, threads);
-
-    if let Some(bootstrap_reps) = args.bootstrap {
-        build_bootstrap_tree(sketches, bootstrap_reps, &tree_algorithm, args.output)
-    } else {
-        build_single_tree(sketches, &tree_algorithm, &args)
     }
 }
 

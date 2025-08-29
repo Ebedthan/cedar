@@ -38,11 +38,11 @@ pub enum Commands {
 pub struct BuildArgs {
     /// Genomes FASTA files to build tree [suports .gz, .xz, .bz2]
     #[arg(long)]
-    pub genomes: Vec<String>,
+    pub genomes: Option<Vec<String>>,
 
     /// Directory of orthologous groups FASTA files
     #[arg(long)]
-    pub groups: Vec<String>,
+    pub groups: Option<Vec<String>>,
 
     /// Output tree (Newick format) to FILE
     #[arg(short, value_name = "FILE")]

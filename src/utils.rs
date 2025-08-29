@@ -13,6 +13,7 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::io::{self, Write};
 use std::path::Path;
+use std::path::PathBuf;
 use std::process;
 use std::sync::Once;
 
@@ -281,6 +282,8 @@ pub fn determine_kmer_size(args: &cli::BuildArgs, stats: &[(String, usize)]) -> 
         kmer_size
     }
 }
+
+pub fn check_required_tools(tools: &[&str]) {}
 
 #[cfg(test)]
 mod tests {
