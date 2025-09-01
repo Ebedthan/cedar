@@ -42,19 +42,15 @@ pub struct BuildArgs {
 
     /// Directory of orthologous groups FASTA files
     #[arg(long)]
-    pub groups: Option<Vec<String>>,
+    pub groups: Option<String>,
 
     /// Output tree (Newick format) to FILE
     #[arg(short, value_name = "FILE")]
     pub output: Option<String>,
 
-    /// Keep intermediate files
-    #[arg(short = 'K')]
-    pub keep: bool,
-
-    /// Temporary directory name
-    #[arg(long, value_name = "DIR", default_value_t = String::from("cedar_results"))]
-    pub tempdir: String,
+    /// Intermediate files directory. If set, intermediate files are kept and not otherwise.
+    #[arg(long, value_name = "DIR")]
+    pub tempdir: Option<String>,
 
     /// Boostrap replicates
     #[arg(short, value_name = "INT")]

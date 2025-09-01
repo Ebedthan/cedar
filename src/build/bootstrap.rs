@@ -157,7 +157,6 @@ pub fn build_single_tree(
     let newick = matrix.compute_newick_tree(tree_algorithm)?;
 
     utils::output_tree(args.output.clone(), newick)?;
-    utils::manage_tempdir(args.keep, &matrix, &args.tempdir, true)?;
 
     Ok(())
 }

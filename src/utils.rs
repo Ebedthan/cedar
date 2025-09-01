@@ -41,21 +41,6 @@ pub fn output_tree(output: Option<String>, newick: String) -> anyhow::Result<()>
     Ok(())
 }
 
-pub fn manage_tempdir(
-    keep: bool,
-    matrix: &speedytree::DistanceMatrix,
-    tempdir: &str,
-    append: bool,
-) -> anyhow::Result<()> {
-    if keep {
-        let p = Path::new(tempdir);
-        dist::to_phylip(matrix, p, append)
-    } else {
-        fs::remove_dir_all(tempdir)?;
-        Ok(())
-    }
-}
-
 /// Check if provided file is in FASTA format.
 ///
 /// **Input**: `path`: file path
