@@ -41,12 +41,12 @@ pub struct BuildArgs {
     pub indir: String,
 
     /// Build tree using mash distance
-    #[arg(long, help_heading = "Tree building mode")]
+    #[arg(long, conflicts_with = "ortholog", help_heading = "Tree building mode")]
     pub mash: bool,
 
     /// Treat input files as orthologous groups
     #[arg(long, help_heading = "Tree building mode")]
-    pub orthologous: bool,
+    pub ortholog: bool,
 
     /// Output tree (Newick format) to FILE
     #[arg(short, value_name = "FILE")]

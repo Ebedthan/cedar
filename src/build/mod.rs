@@ -3,8 +3,7 @@
 // This file may not be copied, modified, or distributed except according
 // to those terms.
 
-/*
-use anyhow::{anyhow, Context};
+use anyhow::anyhow;
 use rayon::prelude::*;
 use regex::Regex;
 use std::collections::HashMap;
@@ -24,13 +23,32 @@ pub mod dist;
 pub mod sketch;
 
 pub fn build_tree_from_genomes(args: &cli::BuildArgs, threads: usize) -> anyhow::Result<()> {
-    let genomes = args.genomes.as_ref().unwrap();
+    let genomes = &args.indir;
+    let mut inputs = Vec::new();
 
     // Validate inputs early
-    utils::validate_inputs(&genomes)?;
+    let mut invalid = vec![];
+    let mut multi_seq = vec![];
+
+    for file in fs::read_dir(genomes)? {
+        let file = file?;
+        inputs.push(file.path());
+        if !utils::is_fasta_format(file.path()) {
+            invalid.push(file.path());
+        } else if utils::is_multi_fasta(file.path()) {
+            multi_seq.push(file.path());
+        }
+    }
+
+    if !invalid.is_empty() {
+        anyhow::bail!(
+            "Input validation error: Only FASTA files are allowed. Invalid files: {:?}",
+            invalid
+        );
+    }
 
     // Compute genome statistics in parallel
-    let stats = utils::compute_genome_stats(&genomes)?;
+    let stats = utils::compute_genome_stats(&inputs)?;
 
     // Check for genome outliers and exit early if found
     utils::check_genome_outliers(&stats, 0.01)?;
@@ -69,7 +87,7 @@ pub fn build_tree_from_orthologous_groups(
     args: &cli::BuildArgs,
     threads: usize,
 ) -> anyhow::Result<()> {
-    let orthologous = args..as_ref().unwrap();
+    let orthologous = &args.indir;
     let outdir = if let Some(p) = &args.output {
         p.to_string()
     } else {
@@ -371,4 +389,3 @@ fn run_iqtree3(
         ))
     }
 }
-*/

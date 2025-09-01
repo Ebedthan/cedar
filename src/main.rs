@@ -13,7 +13,7 @@ use clap::Parser;
 use anyhow::Result;
 
 use crate::{
-    //build::{build_tree_from_genomes, build_tree_from_orthologous_groups},
+    build::{build_tree_from_genomes, build_tree_from_orthologous_groups},
     cli::Commands,
     utils::init_rayon_pool,
 };
@@ -24,12 +24,11 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Build(args) => {
-            /*
-            if let Some(_) = args.genomes {
-                build_tree_from_genomes(&args, cli.threads)
-            } else {
-                build_tree_from_orthologous_groups(&args, cli.threads)
-            }*/
+            if args.mash {
+                build_tree_from_genomes(&args, cli.threads)?
+            } else if args.ortholog {
+                build_tree_from_orthologous_groups(&args, cli.threads)?
+            }
             Ok(())
         }
         Commands::Compare(args) => compare_command(args),

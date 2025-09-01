@@ -3,8 +3,8 @@
 // This file may not be copied, modified, or distributed except according
 // to those terms.
 
-//use crate::build::dist;
-// use crate::build::sketch;
+use crate::build::dist;
+use crate::build::sketch;
 use crate::cli;
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
@@ -47,7 +47,7 @@ pub fn output_tree(output: Option<String>, newick: String) -> anyhow::Result<()>
 ///
 /// **Output**: a boolean value. `true` if is FASTA formated, `false` otherwise.
 ///
-pub fn is_fasta_format(path: &str) -> bool {
+pub fn is_fasta_format(path: PathBuf) -> bool {
     let file = File::open(path).expect("file should exists before opening.");
     let reader = BufReader::new(file);
     let mut lines = reader.lines();
@@ -67,7 +67,7 @@ pub fn is_fasta_format(path: &str) -> bool {
 /// **Input**: `path`: file path
 ///
 /// **Output**: a boolean value. `true` if multi fasta, `false` otherwise.
-pub fn is_multi_fasta(path: &str) -> bool {
+pub fn is_multi_fasta(path: PathBuf) -> bool {
     let file = File::open(path).expect("file should be available");
     let reader = BufReader::new(file);
 
@@ -91,8 +91,8 @@ pub fn is_multi_fasta(path: &str) -> bool {
 ///
 /// **Output**: a `anyhow::Result` of tuple of String (sequence id) and usize (sequence size).
 ///
-pub fn compute_genome_stats(filenames: &[String]) -> anyhow::Result<Vec<(String, usize)>> {
-    fn helper(path: &String) -> anyhow::Result<(String, usize)> {
+pub fn compute_genome_stats(filenames: &[PathBuf]) -> anyhow::Result<Vec<(String, usize)>> {
+    fn helper(path: &PathBuf) -> anyhow::Result<(String, usize)> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
 
@@ -218,11 +218,7 @@ pub fn check_genome_outliers(data: &[(String, usize)], epsilon: f64) -> anyhow::
     Ok(())
 }
 
-pub fn validate_inputs(filenames: &[String]) -> anyhow::Result<()> {
-    if filenames.len() < 3 {
-        anyhow::bail!("Input validation error: At least three input FASTA files must be provided.");
-    }
-
+/*pub fn validate_inputs(filenames: &[String]) -> anyhow::Result<()> {
     let mut invalid = vec![];
     let mut multi_seq = vec![];
 
@@ -249,9 +245,8 @@ pub fn validate_inputs(filenames: &[String]) -> anyhow::Result<()> {
     }
 
     Ok(())
-}
+}*/
 
-/*
 pub fn determine_kmer_size(args: &cli::BuildArgs, stats: &[(String, usize)]) -> u8 {
     if let Some(km) = args.kmer {
         println!("User-defined k-mer size: {}", km);
@@ -268,7 +263,7 @@ pub fn determine_kmer_size(args: &cli::BuildArgs, stats: &[(String, usize)]) -> 
         kmer_size
     }
 }
-*/
+
 pub fn check_required_tools(tools: &[&str]) {}
 
 #[cfg(test)]
@@ -277,11 +272,11 @@ mod tests {
 
     #[test]
     fn test_is_fasta_format_ok() {
-        assert!(is_fasta_format("test/bac168.fna"));
+        assert!(is_fasta_format(PathBuf::from("test/bac168.fna")));
     }
 
     #[test]
     fn test_is_fasta_format_not_ok() {
-        assert!(!is_fasta_format("test/test.fq"));
+        assert!(!is_fasta_format(PathBuf::from("test/test.fq")));
     }
 }

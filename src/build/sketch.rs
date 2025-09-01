@@ -3,8 +3,9 @@
 // This file may not be copied, modified, or distributed except according
 // to those terms.
 
+use std::fs;
 use std::fs::File;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::cli;
 use finch::serialization::Sketch;
@@ -28,16 +29,15 @@ pub fn k_computing(s: u32, p: f64) -> u8 {
 
 /// Create sketches from fasta files
 pub fn create_sketches(
-    filenames: &[String],
+    filenames: &[PathBuf],
     kmer_size: u8,
     sketch_size: usize,
-    oversketch: usize,
     seed: u64,
     outdir: &str,
 ) -> FinchResult<Vec<String>> {
     // Create SketchParams struct for finch
     let sketch_params = SketchParams::Mash {
-        kmers_to_sketch: sketch_size * oversketch,
+        kmers_to_sketch: sketch_size * 200,
         final_size: sketch_size,
         no_strict: false,
         kmer_length: kmer_size,
@@ -56,11 +56,9 @@ pub fn create_sketches(
     filenames
         .iter()
         .map(|filename| {
-            let sketches = sketch_files(&[filename], &sketch_params, &filter_params)?;
-            let out_path = PathBuf::from(outdir).join(format!(
-                "{}.msh",
-                Path::new(filename).file_name().unwrap().to_string_lossy()
-            ));
+            let filename: String = filename.display().to_string();
+            let sketches = sketch_files(&[&filename], &sketch_params, &filter_params)?;
+            let out_path = PathBuf::from(outdir).join(format!("{}.msh", filename));
             let mut out_file = File::create(&out_path)?;
             write_mash_file(&mut out_file, &sketches)?;
             Ok(out_path.to_string_lossy().into_owned())
@@ -72,15 +70,14 @@ pub fn create_and_load_sketches(
     args: &cli::BuildArgs,
     kmer_size: u8,
 ) -> anyhow::Result<Vec<Sketch>> {
+    let mut inputs = Vec::new();
+
+    for file in fs::read_dir(&args.indir)? {
+        inputs.push(file?.path());
+    }
+
     // Create sketches
-    let sketches_path = create_sketches(
-        args.genomes.as_ref().unwrap(),
-        kmer_size,
-        args.size,
-        args.oversketch,
-        args.seed,
-        &args.tempdir,
-    )?;
+    let sketches_path = create_sketches(&inputs, kmer_size, args.size, args.seed, "cedar_result")?;
 
     // Load sketches in parallel
     let sketches: Vec<Sketch> = sketches_path
@@ -101,20 +98,23 @@ pub fn create_and_load_sketches(
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::Path;
 
     #[test]
     fn test_create_sketches() {
         // Define test parameters
-        let filenames = ["test/bacam.fna".to_string(), "test/bacsp.fna".to_string()];
+        let filenames = [
+            PathBuf::from("test/bacam.fna"),
+            PathBuf::from("test/bacsp.fna"),
+        ];
         let kmer_size = 21;
         let sketch_size = 1000;
-        let oversketch = 200;
         let seed = 42;
         let outdir = "test_output";
         fs::create_dir(outdir).unwrap();
 
         // Call the function under test
-        let result = create_sketches(&filenames, kmer_size, sketch_size, oversketch, seed, outdir);
+        let result = create_sketches(&filenames, kmer_size, sketch_size, seed, outdir);
         // Verify that the function returned successfully
         assert!(result.is_ok());
 
