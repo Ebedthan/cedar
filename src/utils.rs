@@ -3,7 +3,6 @@
 // This file may not be copied, modified, or distributed except according
 // to those terms.
 
-use crate::build::dist;
 use crate::build::sketch;
 use crate::cli;
 use rayon::prelude::*;
@@ -12,7 +11,6 @@ use std::fs::{self, File};
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::{self, Write};
-use std::path::Path;
 use std::path::PathBuf;
 use std::process;
 use std::sync::Once;
@@ -218,35 +216,6 @@ pub fn check_genome_outliers(data: &[(String, usize)], epsilon: f64) -> anyhow::
     Ok(())
 }
 
-/*pub fn validate_inputs(filenames: &[String]) -> anyhow::Result<()> {
-    let mut invalid = vec![];
-    let mut multi_seq = vec![];
-
-    for file in filenames {
-        if !is_fasta_format(file) {
-            invalid.push(file.clone());
-        } else if is_multi_fasta(file) {
-            multi_seq.push(file.clone());
-        }
-    }
-
-    if !invalid.is_empty() {
-        anyhow::bail!(
-            "Input validation error: Only FASTA files are allowed. Invalid files: {}",
-            invalid.join(", ")
-        );
-    }
-
-    if !multi_seq.is_empty() {
-        anyhow::bail!(
-            "Input validation error: Only single-sequence FASTA files are allowed. Multi-sequence files: {}",
-            multi_seq.join(", ")
-        );
-    }
-
-    Ok(())
-}*/
-
 pub fn determine_kmer_size(args: &cli::BuildArgs, stats: &[(String, usize)]) -> u8 {
     if let Some(km) = args.kmer {
         println!("User-defined k-mer size: {}", km);
@@ -264,7 +233,20 @@ pub fn determine_kmer_size(args: &cli::BuildArgs, stats: &[(String, usize)]) -> 
     }
 }
 
-pub fn check_required_tools(tools: &[&str]) {}
+pub fn check_required_tools() -> anyhow::Result<()> {
+    let deps = ["linsi", "iqtree3", "trimal"];
+
+    for dep in &deps {
+        match which::which(dep) {
+            Ok(path) => {
+                println!("✅ Found {} at {}", dep, path.display());
+            }
+            Err(_) => return Err(anyhow::anyhow!("❌ {} not found in PATH", dep)),
+        }
+    }
+
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {

@@ -27,6 +27,7 @@ fn main() -> Result<()> {
             if args.mash {
                 build_tree_from_genomes(&args, cli.threads)?
             } else if args.ortholog {
+                utils::check_required_tools()?;
                 build_tree_from_orthologous_groups(&args, cli.threads)?
             }
             Ok(())
