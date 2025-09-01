@@ -3,6 +3,7 @@
 // This file may not be copied, modified, or distributed except according
 // to those terms.
 
+/*
 use anyhow::{anyhow, Context};
 use rayon::prelude::*;
 use regex::Regex;
@@ -68,7 +69,7 @@ pub fn build_tree_from_orthologous_groups(
     args: &cli::BuildArgs,
     threads: usize,
 ) -> anyhow::Result<()> {
-    let orthologous = args.groups.as_ref().unwrap();
+    let orthologous = args..as_ref().unwrap();
     let outdir = if let Some(p) = &args.output {
         p.to_string()
     } else {
@@ -370,3 +371,4 @@ fn run_iqtree3(
         ))
     }
 }
+*/

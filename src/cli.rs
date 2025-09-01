@@ -28,7 +28,7 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Build NJ tree using mash distance
+    /// Phylogenetic tree building
     Build(BuildArgs),
 
     /// Compare trees
@@ -36,25 +36,56 @@ pub enum Commands {
 }
 #[derive(Args, Debug)]
 pub struct BuildArgs {
-    /// Genomes FASTA files to build tree [suports .gz, .xz, .bz2]
-    #[arg(long)]
-    pub genomes: Option<Vec<String>>,
+    /// Input directory containing FASTA files
+    #[arg(value_name = "DIR")]
+    pub indir: String,
 
-    /// Directory of orthologous groups FASTA files
-    #[arg(long)]
-    pub groups: Option<String>,
+    /// Build tree using mash distance
+    #[arg(long, help_heading = "Tree building mode")]
+    pub mash: bool,
+
+    /// Treat input files as orthologous groups
+    #[arg(long, help_heading = "Tree building mode")]
+    pub orthologous: bool,
 
     /// Output tree (Newick format) to FILE
     #[arg(short, value_name = "FILE")]
     pub output: Option<String>,
 
-    /// Intermediate files directory. If set, intermediate files are kept and not otherwise.
+    /// Intermediate files directory.
     #[arg(long, value_name = "DIR")]
     pub tempdir: Option<String>,
 
-    /// Boostrap replicates
-    #[arg(short, value_name = "INT")]
+    /// Bootstrap replicates
+    #[arg(
+        short = 'B',
+        long = "boot",
+        value_name = "INT",
+        help_heading = "Tree options"
+    )]
     pub bootstrap: Option<usize>,
+
+    /// Jackknife replicates
+    #[arg(
+        short = 'J',
+        long = "jack",
+        value_name = "INT",
+        help_heading = "Tree options"
+    )]
+    pub jacknife: Option<usize>,
+
+    /// Subsampling proportion for jackknife
+    #[arg(
+        long,
+        value_name = "FLOAT",
+        default_value_t = 0.5,
+        help_heading = "Tree options"
+    )]
+    pub jacknife_prop: f64,
+
+    /// Compute canonical NJ tree
+    #[arg(long, help_heading = "Tree options")]
+    pub canonical: bool,
 
     /// Sketch size
     #[arg(
@@ -66,7 +97,7 @@ pub struct BuildArgs {
     )]
     pub size: usize,
 
-    /// Seed for the hash function
+    /// Seed for hash function
     #[arg(
         short = 'S',
         long,
@@ -84,20 +115,6 @@ pub struct BuildArgs {
         help_heading = "Sketching options"
     )]
     pub kmer: Option<u8>,
-
-    /// Amount of extra scketching before filtering
-    #[arg(
-        short = 'x',
-        long,
-        default_value_t = 200,
-        value_name = "INT",
-        help_heading = "Sketching options"
-    )]
-    pub oversketch: usize,
-
-    /// Compute canonical NJ tree
-    #[arg(short = 'c', help_heading = "Tree options")]
-    pub canonical: bool,
 }
 
 #[derive(Args, Debug)]

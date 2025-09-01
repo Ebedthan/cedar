@@ -3,8 +3,8 @@
 // This file may not be copied, modified, or distributed except according
 // to those terms.
 
-use crate::build::dist;
-use crate::build::sketch;
+//use crate::build::dist;
+// use crate::build::sketch;
 use crate::cli;
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
@@ -251,6 +251,7 @@ pub fn validate_inputs(filenames: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/*
 pub fn determine_kmer_size(args: &cli::BuildArgs, stats: &[(String, usize)]) -> u8 {
     if let Some(km) = args.kmer {
         println!("User-defined k-mer size: {}", km);
@@ -267,7 +268,7 @@ pub fn determine_kmer_size(args: &cli::BuildArgs, stats: &[(String, usize)]) -> 
         kmer_size
     }
 }
-
+*/
 pub fn check_required_tools(tools: &[&str]) {}
 
 #[cfg(test)]
