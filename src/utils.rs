@@ -45,7 +45,7 @@ pub fn output_tree(output: Option<String>, newick: String) -> anyhow::Result<()>
 ///
 /// **Output**: a boolean value. `true` if is FASTA formated, `false` otherwise.
 ///
-pub fn is_fasta_format(path: PathBuf) -> bool {
+pub fn is_fasta_format(path: &PathBuf) -> bool {
     let file = File::open(path).expect("file should exists before opening.");
     let reader = BufReader::new(file);
     let mut lines = reader.lines();
@@ -65,7 +65,7 @@ pub fn is_fasta_format(path: PathBuf) -> bool {
 /// **Input**: `path`: file path
 ///
 /// **Output**: a boolean value. `true` if multi fasta, `false` otherwise.
-pub fn is_multi_fasta(path: PathBuf) -> bool {
+pub fn is_multi_fasta(path: &PathBuf) -> bool {
     let file = File::open(path).expect("file should be available");
     let reader = BufReader::new(file);
 
@@ -234,7 +234,7 @@ pub fn determine_kmer_size(args: &cli::BuildArgs, stats: &[(String, usize)]) -> 
 }
 
 pub fn check_required_tools() -> anyhow::Result<()> {
-    let deps = ["linsi", "iqtree3", "trimal"];
+    let deps = ["mafft", "iqtree3", "trimal"];
 
     for dep in &deps {
         match which::which(dep) {
@@ -254,11 +254,11 @@ mod tests {
 
     #[test]
     fn test_is_fasta_format_ok() {
-        assert!(is_fasta_format(PathBuf::from("test/bac168.fna")));
+        assert!(is_fasta_format(&PathBuf::from("test/bac168.fna")));
     }
 
     #[test]
     fn test_is_fasta_format_not_ok() {
-        assert!(!is_fasta_format(PathBuf::from("test/test.fq")));
+        assert!(!is_fasta_format(&PathBuf::from("test/test.fq")));
     }
 }

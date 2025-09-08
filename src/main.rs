@@ -13,7 +13,7 @@ use clap::Parser;
 use anyhow::Result;
 
 use crate::{
-    build::{build_tree_from_genomes, build_tree_from_orthologous_groups},
+    build::{build_tree_from_orthologous_groups, build_tree_using_mash_distance},
     cli::Commands,
     utils::init_rayon_pool,
 };
@@ -25,7 +25,7 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Build(args) => {
             if args.mash {
-                build_tree_from_genomes(&args, cli.threads)?
+                build_tree_using_mash_distance(&args, cli.threads)?
             } else if args.ortholog {
                 utils::check_required_tools()?;
                 build_tree_from_orthologous_groups(&args, cli.threads)?
