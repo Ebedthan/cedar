@@ -13,9 +13,7 @@ speedytree = "0.1.0"
 rayon = "1"
 rand = "0.10"
 statrs = { version = "0.19", default-features = false }
-
-[dev-dependencies]
-tempfile = "3.10"
+tempfile = "3"
 
 [profile.release]
 opt-level = 3

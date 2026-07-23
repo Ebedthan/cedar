@@ -362,6 +362,59 @@ impl ComputeTree for DistanceMatrix {
     }
 }
 
+/// Eq. 1 (Ondov et al. 2016): probability that a specific k-mer appears
+/// somewhere in a random genome of length `n`, alphabet size 4.
+fn kmer_hit_probability(genome_size: u64, kmer_length: u8) -> f64 {
+    1.0 - (1.0 - 4f64.powi(-(kmer_length as i32))).powf(genome_size as f64)
+}
+
+/// Eq. 5: expected Jaccard index between two *unrelated* random genomes
+/// given each genome's own chance-hit probability from Eq. 1.
+fn background_jaccard(p_x: f64, p_y: f64) -> f64 {
+    let denom = p_x + p_y - p_x * p_y;
+    if denom <= 0.0 {
+        0.0
+    } else {
+        (p_x * p_y) / denom
+    }
+}
+
+/// Eq. 8: P(shared hashes >= x | Binomial(s, r)) via the same
+/// incomplete-beta identity used for the Clopper-Pearson CI.
+fn mash_pvalue(x: u64, s: u64, r: f64) -> f64 {
+    if x == 0 {
+        return 1.0;
+    }
+
+    if r <= 0.0 {
+        return 0.0;
+    }
+
+    if r >= 1.0 {
+        return 1.0;
+    }
+
+    Beta::new(x as f64, (s - x + 1) as f64)
+        .map(|b| b.cdf(r))
+        .unwrap_or(1.0)
+}
+
+/// Mash's significance test:
+/// Is the observed sharing between two genomes of sizes `size_x` / `size_y` distinguishable from chance?
+pub fn mash_significance(
+    shared: u64,
+    total: u64,
+    size_x: u64,
+    size_y: u64,
+    kmer_length: u8,
+) -> f64 {
+    let r = background_jaccard(
+        kmer_hit_probability(size_x, kmer_length),
+        kmer_hit_probability(size_y, kmer_length),
+    );
+    mash_pvalue(shared, total, r)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
