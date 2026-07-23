@@ -1,4 +1,4 @@
-// Copyright 2024-2025 Anicet Ebou.
+// Copyright 2024-2026 Anicet Ebou.
 // Licensed under the MIT license (http://opensource.org/licenses/MIT)
 // This file may not be copied, modified, or distributed except according
 // to those terms.
@@ -20,13 +20,38 @@ use std::{
 pub struct Clade {
     pub leaves: Vec<String>, // sorted leaves for deterministic behavior
     pub length: Option<f64>, // branch length, excluded from equality
+    /// Proportion of input trees in which this clade (bipartition) occurred,
+    /// e.g. bootstrap support. Distinct from `length`: a clade's branch length
+    /// and its frequency across replicate trees are independent quantities and
+    /// must never be conflated.
+    pub support: Option<f64>,
 }
 
 impl Clade {
     pub fn new(mut leaves: Vec<String>, length: Option<f64>) -> Self {
         leaves.sort(); // enforce deterministic ordering in O(n log n)
         leaves.dedup(); // remove duplicates in O(n)
-        Clade { leaves, length }
+        Clade {
+            leaves,
+            length,
+            support: None,
+        }
+    }
+
+    /// Construct a clade carrying an explicit support value (e.g. the fraction
+    /// of bootstrap replicate trees in which it occurred).
+    pub fn new_with_support(
+        mut leaves: Vec<String>,
+        length: Option<f64>,
+        support: Option<f64>,
+    ) -> Self {
+        leaves.sort();
+        leaves.dedup();
+        Clade {
+            leaves,
+            length,
+            support,
+        }
     }
 
     /// Return the set of leaf of a clade
@@ -66,6 +91,9 @@ impl Clade {
 pub struct Node {
     pub name: Option<String>,
     pub length: Option<f64>,
+    /// Clade support (e.g. bootstrap proportion), independent of `length`.
+    /// Only meaningful for internal nodes.
+    pub support: Option<f64>,
     pub children: Vec<Node>,
 }
 
@@ -74,6 +102,7 @@ impl Node {
         Node {
             name,
             length,
+            support: None,
             children: Vec::new(),
         }
     }
@@ -95,7 +124,17 @@ impl Node {
                 .collect::<Vec<_>>()
                 .join(",");
 
-            let label = self.name.clone().unwrap_or_default();
+            // Prefer an explicit name if set; otherwise fall back to printing
+            // support (as a percentage) as the internal node label, following
+            // the common bootstrap-tree convention (e.g. RAxML/IQ-TREE style).
+            let label = match &self.name {
+                Some(n) if !n.is_empty() => n.clone(),
+                _ => match self.support {
+                    Some(s) => format!("{:.0}", (s * 100.0).round()),
+                    None => String::new(),
+                },
+            };
+
             match self.length {
                 Some(len) if !label.is_empty() => format!("({}){}:{:.4}", joined, label, len),
                 Some(len) => format!("({}):{:.4}", joined, len),
@@ -165,6 +204,7 @@ fn parse_subtree(chars: &mut std::iter::Peekable<Chars>) -> Result<Node, String>
         Ok(Node {
             name: None,
             length,
+            support: None,
             children,
         })
     } else {
@@ -181,6 +221,7 @@ fn parse_subtree(chars: &mut std::iter::Peekable<Chars>) -> Result<Node, String>
         Ok(Node {
             name: Some(name),
             length,
+            support: None,
             children: Vec::new(),
         })
     }
@@ -260,6 +301,7 @@ fn build_node(
         return Node {
             name: Some(clade.leaves[0].clone()),
             length: clade.length,
+            support: clade.support,
             children: vec![],
         };
     }
@@ -273,6 +315,20 @@ fn build_node(
         if let Some(candidates) = clades_by_size.get(&size) {
             for &sub_clade in candidates {
                 if sub_clade.is_subset_of_sorted(&clade.leaves) {
+                    // Guard against incompatible (partially overlapping) input
+                    // clades: accepting a clade that shares only some leaves
+                    // with an already-accepted sibling would duplicate a leaf
+                    // under this node. Callers are expected to pass in a
+                    // compatible (laminar) clade set already (see
+                    // `filter_compatible_clades` in `build/bootstrap.rs`), but
+                    // this check keeps `build_tree_from_clades` safe even if
+                    // they don't.
+                    let overlaps_accepted_sibling =
+                        sub_clade.leaves.iter().any(|leaf| covered.contains(leaf));
+                    if overlaps_accepted_sibling {
+                        continue;
+                    }
+
                     let is_maximal =
                         !is_contained_in_larger_subclade(sub_clade, clade, clades_by_size);
 
@@ -298,6 +354,7 @@ fn build_node(
             children.push(Node {
                 name: Some(taxon.clone()),
                 length: leaf_length,
+                support: None,
                 children: vec![],
             });
         }
@@ -314,6 +371,7 @@ fn build_node(
     Node {
         name: None,
         length: clade.length,
+        support: clade.support,
         children,
     }
 }

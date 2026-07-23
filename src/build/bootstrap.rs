@@ -1,4 +1,4 @@
-// Copyright 2024-2025 Anicet Ebou.
+// Copyright 2024-2026 Anicet Ebou.
 // Licensed under the MIT license (http://opensource.org/licenses/MIT)
 // This file may not be copied, modified, or distributed except according
 // to those terms.
@@ -14,31 +14,83 @@ use rand::{rng, seq::IndexedRandom};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 
-/// Majority rule: keep clades occurring >= threshold times
-fn majority_rule(clades: Vec<Clade>, threshold: usize) -> Vec<Clade> {
-    let mut clade_group: HashMap<Vec<String>, Vec<f64>> = HashMap::with_capacity(clades.len());
+/// Per-clade bookkeeping across replicate trees: how many trees contained
+/// this clade (bipartition), and the branch lengths observed for it. These
+/// are independent quantities, a clade's support is its occurrence
+/// frequency, its length is a separate (averaged) measurement, and must
+/// never be conflated into a single number.
+#[derive(Default)]
+struct CladeStats {
+    count: usize,
+    lengths: Vec<f64>,
+}
 
-    // single passe: group clades by their leaf sets and collect their lengths
+/// Majority rule: keep clades occurring in at least `threshold` of the
+/// `n_trees` input trees, recording each kept clade's occurrence frequency
+/// as its support (e.g. bootstrap support) separately from its branch length.
+fn majority_rule(clades: Vec<Clade>, threshold: usize, n_trees: usize) -> Vec<Clade> {
+    let mut clade_group: HashMap<Vec<String>, CladeStats> = HashMap::with_capacity(clades.len());
+
+    // single pass: group clades by their leaf sets, counting occurrences and
+    // collecting branch lengths independently
     for clade in clades {
-        let lengths = clade_group.entry(clade.leaves).or_default();
+        let stats = clade_group.entry(clade.leaves).or_default();
+        stats.count += 1;
         if let Some(length) = clade.length {
-            lengths.push(length);
+            stats.lengths.push(length);
         }
     }
 
-    // filter and average in one step
+    // filter by occurrence count, average lengths, and compute support
     clade_group
         .into_iter()
-        .filter(|(_, lengths)| lengths.len() >= threshold)
-        .map(|(leaves, lengths)| {
-            let avg_length = if lengths.is_empty() {
+        .filter(|(_, stats)| stats.count >= threshold)
+        .map(|(leaves, stats)| {
+            let avg_length = if stats.lengths.is_empty() {
                 None
             } else {
-                Some(lengths.iter().sum::<f64>() / lengths.len() as f64)
+                Some(stats.lengths.iter().sum::<f64>() / stats.lengths.len() as f64)
             };
-            Clade::new(leaves, avg_length)
+            let support = if n_trees == 0 {
+                None
+            } else {
+                Some(stats.count as f64 / n_trees as f64)
+            };
+            Clade::new_with_support(leaves, avg_length, support)
         })
         .collect()
+}
+
+/// Two clades are compatible (can coexist in the same tree) only if their
+/// leaf sets are nested (one a subset of the other) or disjoint. Clades that
+/// partially overlap cannot both appear in a valid tree, accepting both
+/// would require duplicating a leaf under two different branches.
+fn is_compatible(a: &Clade, b: &Clade) -> bool {
+    let a_set: HashSet<&String> = a.leaves.iter().collect();
+    let b_set: HashSet<&String> = b.leaves.iter().collect();
+    let shared = a_set.intersection(&b_set).count();
+    shared == 0 || shared == a_set.len() || shared == b_set.len()
+}
+
+/// Greedily reduce a set of clades to a compatible (laminar) family, required
+/// for building a valid consensus tree. Clades are considered in descending
+/// order of support (ties broken deterministically by leaf set) so that
+/// higher-support bipartitions win over conflicting lower-support ones.
+fn filter_compatible_clades(mut clades: Vec<Clade>) -> Vec<Clade> {
+    clades.sort_by(|a, b| {
+        b.support
+            .partial_cmp(&a.support)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.leaves.cmp(&b.leaves))
+    });
+
+    let mut accepted: Vec<Clade> = Vec::with_capacity(clades.len());
+    for clade in clades {
+        if accepted.iter().all(|kept| is_compatible(&clade, kept)) {
+            accepted.push(clade);
+        }
+    }
+    accepted
 }
 
 /// Extract clades from a tree, returning Vec<Clade> with sorted leaves
@@ -70,6 +122,7 @@ fn get_clades(node: &Node) -> Vec<Clade> {
 }
 
 pub fn build_consensus(trees: Vec<Tree>, threshold: usize) -> Tree {
+    let n_trees = trees.len();
     let mut clades: Vec<Clade> = Vec::new();
 
     for tree in trees {
@@ -84,8 +137,9 @@ pub fn build_consensus(trees: Vec<Tree>, threshold: usize) -> Tree {
         .collect();
     all_leaves.sort();
 
-    let kept_clades = majority_rule(clades, threshold);
-    build_tree_from_clades(&all_leaves, &kept_clades)
+    let kept_clades = majority_rule(clades, threshold, n_trees);
+    let compatible_clades = filter_compatible_clades(kept_clades);
+    build_tree_from_clades(&all_leaves, &compatible_clades)
 }
 
 // Helper functions
@@ -133,6 +187,10 @@ pub fn build_bootstrap_tree(
     let trees: anyhow::Result<Vec<Tree>> = (0..reps)
         .into_par_iter()
         .map(|_| -> anyhow::Result<Tree> {
+            // TODO(phase0-next): hardcoded 1000 ignores the user-configured
+            // sketch size (`args.size`); should resample at each sketch's own
+            // length. Left as-is here — this fix is scoped to the consensus
+            // tree/support bug only.
             let tmp_sketches = sample_sketches_with_replacement(sketches.clone(), 1000);
             let tmp_distance = dist::compute_distances(tmp_sketches);
             let tmp_matrix = dist::distance_to_matrix(tmp_distance);
@@ -143,7 +201,12 @@ pub fn build_bootstrap_tree(
         .collect();
 
     let trees = trees?;
-    let consensus_tree = build_consensus(trees, reps);
+    // Majority-rule threshold: a clade must appear in more than half the
+    // replicate trees to be kept. Using `reps` itself here would require a
+    // clade to appear in *every* replicate (strict/unanimous consensus),
+    // which collapses to a near-unresolved tree on real data.
+    let majority_threshold = reps / 2 + 1;
+    let consensus_tree = build_consensus(trees, majority_threshold);
     utils::output_tree(output, consensus_tree.to_newick())
 }
 
@@ -216,7 +279,7 @@ mod tests {
         }
 
         let start = std::time::Instant::now();
-        let result = majority_rule(clades, 50);
+        let result = majority_rule(clades, 50, 1000);
         let duration = start.elapsed();
 
         println!(
@@ -225,6 +288,7 @@ mod tests {
             duration
         );
         assert!(!result.is_empty());
+        assert!(result.iter().all(|c| c.support.is_some()));
     }
 
     #[test]
@@ -252,16 +316,25 @@ mod tests {
             Clade::new(vec!["A".to_string(), "C".to_string()], Some(0.4)), // Only appears once
         ];
 
-        let result = majority_rule(clades, 2);
+        // Treat these 4 entries as coming from 4 replicate trees.
+        let result = majority_rule(clades, 2, 4);
 
         // Only {A,B} should pass threshold of 2
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].leaves, vec!["A", "B"]);
 
-        // Check that branch length is stored as frequency (current implementation issue)
-        // This test will reveal the bug where length becomes support value
-        println!("Majority rule result length: {:?}", result[0].length);
-        // Current broken implementation will give Some(1.0) instead of averaged length
+        // Branch length is the average of the two observed lengths for
+        // {A,B}. Compared with a tolerance since floating-point averaging
+        // (0.1 + 0.2) / 2 is not bit-exact to the literal 0.15.
+        let length = result[0].length.expect("length should be present");
+        assert!(
+            (length - 0.15).abs() < 1e-9,
+            "unexpected averaged length: {}",
+            length
+        );
+        // Support is the fraction of the 4 input trees containing this
+        // clade (2/4) — tracked independently of branch length.
+        assert_eq!(result[0].support, Some(0.5));
     }
 
     #[test]
@@ -274,39 +347,60 @@ mod tests {
 
         println!("Consensus tree: {}", consensus.to_newick());
 
-        // This test will reveal the broken tree structure
-        // Current implementation creates a flat tree instead of proper hierarchy
-
-        // Check that we don't have duplicate leaves
+        // No leaf should ever be duplicated under two different branches of
+        // the consensus tree (this is what the incompatible-clade bug used
+        // to produce: {A,B} and {A,C} both kept as siblings of the root).
         let leaf_names = get_leaf_names(&consensus.root);
         let unique_leaves: HashSet<_> = leaf_names.iter().collect();
-
-        println!("Leaf names: {:?}", leaf_names);
-        println!("Unique leaves: {:?}", unique_leaves);
-
-        // Should have exactly 4 unique leaves
+        assert_eq!(
+            leaf_names.len(),
+            unique_leaves.len(),
+            "a leaf was duplicated in the consensus tree: {:?}",
+            leaf_names
+        );
         assert_eq!(unique_leaves.len(), 4);
-
-        // Current broken implementation will fail this test
         assert!(unique_leaves.contains(&&"A".to_string()));
         assert!(unique_leaves.contains(&&"B".to_string()));
         assert!(unique_leaves.contains(&&"C".to_string()));
         assert!(unique_leaves.contains(&&"D".to_string()));
+
+        // The two input trees disagree ((A,B)(C,D) vs (A,C)(B,D)), so with a
+        // permissive threshold of 1 the consensus must resolve into exactly
+        // one compatible pair of cherries, never a flat/star topology with
+        // all four leaves as direct children of the root.
+        assert_eq!(consensus.root.children.len(), 2);
+        for child in &consensus.root.children {
+            assert_eq!(
+                child.children.len(),
+                2,
+                "expected a fully-resolved cherry, got: {:?}",
+                child
+            );
+        }
     }
 
     #[test]
     fn test_branch_length_averaging_issue() {
-        // Test to demonstrate the branch length issue in majority_rule
+        // Branch length and clade support must be tracked independently.
         let clades = vec![
             Clade::new(vec!["A".to_string(), "B".to_string()], Some(0.1)),
             Clade::new(vec!["A".to_string(), "B".to_string()], Some(0.3)),
         ];
 
-        let result = majority_rule(clades, 2);
+        let result = majority_rule(clades, 2, 2);
+        let kept_clade = result.first().expect("clade should pass threshold");
 
-        if let Some(kept_clade) = result.first() {
-            assert_eq!(kept_clade.length, Some(0.2));
-        }
+        // Length is the average of the two observed values (tolerance since
+        // floating-point averaging isn't guaranteed bit-exact)...
+        let length = kept_clade.length.expect("length should be present");
+        assert!(
+            (length - 0.2).abs() < 1e-9,
+            "unexpected averaged length: {}",
+            length
+        );
+        // ...while support reflects that the clade occurred in both of the
+        // 2 input trees, and is not conflated with the length above.
+        assert_eq!(kept_clade.support, Some(1.0));
     }
 
     #[test]
