@@ -1,3 +1,8 @@
+// Copyright 2024-2025 Anicet Ebou.
+// Licensed under the MIT license (http://opensource.org/licenses/MIT)
+// This file may not be copied, modified, or distributed except according
+// to those terms.
+
 use std::{
     collections::HashMap,
     fs::{self, File},
@@ -11,6 +16,8 @@ use finch::{
 };
 use itertools::Itertools;
 use speedytree::DistanceMatrix;
+
+use statrs::distribution::{Beta, ContinuousCDF};
 
 /// Compute distance between sketches
 /// Uses rayon for parallel processing
@@ -84,6 +91,192 @@ fn extract_basename(path: &str) -> String {
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_string()
+}
+
+/// How much a pairwise distance estimate can be trusted, based on the
+/// relative half-width of the 95% CI on the underlying Jaccard estimate
+/// (not on the Mash distance itself, see the comment on
+/// `compute_distances_with_uncertainty` for why).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reliability {
+    /// The two sketches shared no hashes at all; there is no signal to put
+    /// an uncertainty estimate on in the first place.
+    NoSharedHashes,
+    Reliable,
+    Borderline,
+    Unreliable,
+}
+
+impl Reliability {
+    /// Relative CI half-width at/under which a pair is considered reliable.
+    const RELIABLE_THRESHOLD: f64 = 0.10;
+
+    /// Relative CI half-width at/under which a pair is considered borderline
+    /// (above this, it's flagged unreliable).
+    const BORDERLINE_THRESHOLD: f64 = 0.30;
+
+    fn classify(relative_uncertainty: Option<f64>, common_hashes: u64) -> Self {
+        if common_hashes == 0 {
+            return Reliability::NoSharedHashes;
+        }
+        match relative_uncertainty {
+            // No relative uncertainty could be computed (e.g. J == 0, or an
+            // exact match with J == 1 where the CI collapses to a point),
+            // nothing here to flag as unreliable.
+            None => Reliability::Reliable,
+            Some(r) if r <= Self::RELIABLE_THRESHOLD => Reliability::Reliable,
+            Some(r) if r <= Self::BORDERLINE_THRESHOLD => Reliability::Borderline,
+            _ => Reliability::Unreliable,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Reliability::NoSharedHashes => "no_shared_hashes",
+            Reliability::Reliable => "reliable",
+            Reliability::Borderline => "borderline",
+            Reliability::Unreliable => "unreliable",
+        }
+    }
+}
+
+impl std::fmt::Display for Reliability {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// A pairwise Mash distance annotated with an exact confidence interval,
+/// as produced by `cedar dist` (no tree is built from these).
+#[derive(Debug, Clone)]
+pub struct DistanceEstimate {
+    pub query: String,
+    pub reference: String,
+    pub jaccard: f64,
+    pub jaccard_ci_95_low: f64,
+    pub jaccard_ci_95_high: f64,
+    pub mash_distance: f64,
+    pub mash_distance_ci_95_low: f64,
+    pub mash_distance_ci_95_high: f64,
+    pub shared_hashes: u64,
+    pub total_hashes: u64,
+
+    /// Relative half-width of the 95% CI on the *Jaccard* estimate, the
+    /// quantity `Reliability` is actually classified on. Reported here as
+    /// a diagnostic, not as the primary "how far apart are these genomes"
+    /// figure (that's `mash_distance` / `ci_95_*`).
+    pub relative_uncertainty: Option<f64>,
+
+    pub reliability: Reliability,
+}
+
+// Exact 95% confidence interval (Clopper-Pearson) for the Jaccard estimates (Ondov et al., 2016)
+// Treating the shared-hash count as Binomial(s, J) following Ondov et al.,
+// hypergeometric-to-binomial approximation Mash itself uses.
+//
+// We use the exact binomial CDF as Ondov et al., (Figure S1)
+// `shared` is the observed shared-hash count (x), `total` is the effective comparison
+// size (s, finch's `total_hashes`). Returns `None` if `total == 0`.
+fn jaccard_ci_95(shared: u64, total: u64) -> Option<(f64, f64)> {
+    if total == 0 {
+        return None;
+    }
+
+    let x = shared as f64;
+    let n = total as f64;
+    let alpha = 0.05;
+
+    // Clopper-Pearson: P(X >= x | n, p) = I_p(x, n-x+1), the regularized
+    // incomplete beta function, so its bounds are inverse-beta quantiles.
+    // Boundary cases (x = 0, x = n) are handled separately since the corresponding Beta
+    // shape parameter would otherwise be 0 (invalid).
+    let low = if shared == 0 {
+        0.0
+    } else {
+        Beta::new(x, n - x + 1.0)
+            .map(|b| b.inverse_cdf(alpha / 2.0))
+            .unwrap_or(0.0)
+    };
+
+    let high = if shared == total {
+        1.0
+    } else {
+        Beta::new(x + 1.0, n - x)
+            .map(|b| b.inverse_cdf(1.0 - alpha / 2.0))
+            .unwrap_or(1.0)
+    };
+
+    Some((low, high))
+}
+
+/// Mash distance as a function of the Jaccard index
+/// Matching finch's `distance()` computation exactly
+/// D = -(1 / k) * ln(2J / (1 + J)), clamped to [0, 1]
+/// Used to transform the exact CI bounds on J directly
+/// into bounds on D, rather than linearizing with the delta method
+fn mash_distance_from_jaccard(jaccard: f64, kmer_length: u8) -> f64 {
+    if jaccard <= 0.0 {
+        return 1.0;
+    }
+    let k = kmer_length as f64;
+    let d = -((2.0 * jaccard) / (1.0 + jaccard)).ln() / k;
+    d.clamp(0.0, 1.0)
+}
+
+fn annotate_with_uncertainty(d: SketchDistance, kmer_length: u8) -> DistanceEstimate {
+    let jaccard_ci = jaccard_ci_95(d.common_hashes, d.total_hashes);
+    let (jaccard_ci_95_low, jaccard_ci_95_high) = jaccard_ci.unwrap_or((d.jaccard, d.jaccard));
+
+    // D is monotonically *decreasing* in J, so the distance's upper bound
+    // comes from J's lower bound, and vice versa.
+    let (mash_distance_ci_95_low, mash_distance_ci_95_high) = match jaccard_ci {
+        Some((j_low, j_high)) => (
+            mash_distance_from_jaccard(j_high, kmer_length),
+            mash_distance_from_jaccard(j_low, kmer_length),
+        ),
+        None => (d.mash_distance, d.mash_distance),
+    };
+
+    // Relative half-width of the exact CI on J
+    let relative_uncertainty = jaccard_ci
+        .filter(|_| d.jaccard > 0.0)
+        .map(|(low, high)| (high - low) / (2.0 * d.jaccard));
+    let reliability = Reliability::classify(relative_uncertainty, d.common_hashes);
+
+    DistanceEstimate {
+        query: extract_basename(&d.query),
+        reference: extract_basename(&d.reference),
+        jaccard: d.jaccard,
+        jaccard_ci_95_low,
+        jaccard_ci_95_high,
+        mash_distance: d.mash_distance,
+        mash_distance_ci_95_low,
+        mash_distance_ci_95_high,
+        shared_hashes: d.common_hashes,
+        total_hashes: d.total_hashes,
+        relative_uncertainty,
+        reliability,
+    }
+}
+
+/// Compute pairwise Mash distances annotated with an uncertainty estimate
+/// on each one (the `cedar dist` command). Self-comparisons are dropped,
+/// unlike `compute_distances`, which keeps them for `distance_to_matrix`'s
+/// diagonal, a self-pair's distance is trivially 0 and not informative in
+/// a distance-with-uncertainty table.
+///
+/// All sketches in a single cedar run share the same k-mer size (they're
+/// generated together from the same CLI invocation), so k is read once
+/// from the first sketch rather than tracked per pair.
+pub fn compute_distances_with_uncertainty(sketches: Vec<Sketch>) -> Vec<DistanceEstimate> {
+    let kmer_length = sketches.first().map(|s| s.sketch_params.k()).unwrap_or(21);
+    let distances = compute_distances(sketches);
+
+    distances
+        .into_iter()
+        .filter(|d| extract_basename(&d.query) != extract_basename(&d.reference))
+        .map(|d| annotate_with_uncertainty(d, kmer_length))
+        .collect()
 }
 
 /// Write a PHYLIP file from a distance matrice
@@ -209,6 +402,79 @@ mod tests {
         assert_eq!(matrix.matrix.len(), 2);
         assert_eq!(matrix.matrix[0].len(), 2);
         assert_eq!(matrix.names.len(), 2);
+    }
+
+    fn make_sketch_distance(
+        query: &str,
+        reference: &str,
+        jaccard: f64,
+        common_hashes: u64,
+        total_hashes: u64,
+    ) -> SketchDistance {
+        let mash_distance = (-((2.0 * jaccard) / (1.0 + jaccard)).ln() / 21.0)
+            .max(0.0)
+            .min(1.0);
+        SketchDistance {
+            containment: jaccard, // not used by these tests
+            jaccard,
+            mash_distance,
+            common_hashes,
+            total_hashes,
+            query: query.to_string(),
+            reference: reference.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_reliability_classification_matches_expected_regimes() {
+        // Near-identical strains: tight Jaccard estimate -> reliable, even
+        // though the resulting distance is tiny.
+        let close = annotate_with_uncertainty(make_sketch_distance("A", "B", 0.95, 950, 1000), 21);
+        assert_eq!(close.reliability, Reliability::Reliable);
+        assert!(close.relative_uncertainty.unwrap() < 0.10);
+
+        // Same genus, different species: moderate relative uncertainty.
+        let moderate =
+            annotate_with_uncertainty(make_sketch_distance("A", "C", 0.10, 100, 1000), 21);
+        assert_eq!(moderate.reliability, Reliability::Borderline);
+
+        // Cross-genus: very few shared hashes, estimate is mostly noise.
+        let distant = annotate_with_uncertainty(make_sketch_distance("A", "D", 0.005, 5, 1000), 21);
+        assert_eq!(distant.reliability, Reliability::Unreliable);
+
+        // No shared hashes at all: nothing to estimate uncertainty from.
+        let none_shared =
+            annotate_with_uncertainty(make_sketch_distance("A", "E", 0.0, 0, 1000), 21);
+        assert_eq!(none_shared.reliability, Reliability::NoSharedHashes);
+        assert!(none_shared.relative_uncertainty.is_none());
+    }
+
+    #[test]
+    fn test_distance_ci_is_within_bounds() {
+        let estimate =
+            annotate_with_uncertainty(make_sketch_distance("A", "C", 0.10, 100, 1000), 21);
+        assert!(estimate.mash_distance_ci_95_low <= estimate.mash_distance);
+        assert!(estimate.mash_distance_ci_95_high >= estimate.mash_distance);
+        assert!((0.0..=1.0).contains(&estimate.mash_distance_ci_95_low));
+        assert!((0.0..=1.0).contains(&estimate.mash_distance_ci_95_high));
+
+        // The exact CI on J should likewise bracket the point estimate.
+        assert!(estimate.jaccard_ci_95_low <= estimate.jaccard);
+        assert!(estimate.jaccard_ci_95_high >= estimate.jaccard);
+    }
+
+    #[test]
+    fn test_clopper_pearson_boundary_cases() {
+        // x=0: exact lower bound is 0, no Beta distribution needed for it.
+        let (low, _high) = jaccard_ci_95(0, 1000).unwrap();
+        assert_eq!(low, 0.0);
+
+        // x=n: exact upper bound is 1.
+        let (_low, high) = jaccard_ci_95(1000, 1000).unwrap();
+        assert_eq!(high, 1.0);
+
+        // total == 0: nothing to compute.
+        assert!(jaccard_ci_95(0, 0).is_none());
     }
 
     // Test to_phylip function

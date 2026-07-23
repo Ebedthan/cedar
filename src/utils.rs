@@ -1,3 +1,9 @@
+// Copyright 2024-2025 Anicet Ebou.
+// Licensed under the MIT license (http://opensource.org/licenses/MIT)
+// This file may not be copied, modified, or distributed except according
+// to those terms.
+
+use crate::build::dist;
 use crate::build::sketch;
 use crate::cli;
 use rayon::prelude::*;
@@ -31,6 +37,51 @@ pub fn output_tree(output: Option<String>, newick: String) -> anyhow::Result<()>
             writeln!(io::stdout(), "{}", newick)?;
         }
     }
+    Ok(())
+}
+
+fn fmt_opt(value: Option<f64>) -> String {
+    match value {
+        Some(v) => format!("{:.6}", v),
+        None => "NA".to_string(),
+    }
+}
+
+/// Write a `cedar dist` distance-with-uncertainty table as TSV, to a file
+/// or to stdout if no output path was given.
+pub fn output_distance_table(
+    output: Option<String>,
+    estimates: &[dist::DistanceEstimate],
+) -> anyhow::Result<()> {
+    let mut writer: Box<dyn Write> = match output {
+        Some(path) => Box::new(fs::File::create(path)?),
+        None => Box::new(io::stdout()),
+    };
+
+    writeln!(
+            writer,
+            "genome1\tgenome2\tjaccard\tjaccard_ci_95_low\tjaccard_ci_95_high\tmash_distance\tmash_distance_ci_95_low\tmash_distance_ci_95_high\tshared_hashes\ttotal_hashes\trelative_uncertainty\tflag"
+        )?;
+
+    for e in estimates {
+        writeln!(
+            writer,
+            "{}\t{}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{}",
+            e.query,
+            e.reference,
+            e.jaccard,
+            e.jaccard_ci_95_low,
+            e.jaccard_ci_95_high,
+            e.mash_distance,
+            e.mash_distance_ci_95_low,
+            e.mash_distance_ci_95_high,
+            e.shared_hashes,
+            e.total_hashes,
+            fmt_opt(e.relative_uncertainty),
+            e.reliability,
+        )?;
+    }
+
     Ok(())
 }
 
@@ -211,10 +262,19 @@ pub fn check_genome_outliers(data: &[(String, usize)], epsilon: f64) -> anyhow::
     Ok(())
 }
 
-pub fn determine_kmer_size(args: &cli::BuildArgs, stats: &[(String, usize)]) -> u8 {
-    if let Some(km) = args.kmer {
+pub fn determine_kmer_size(
+    sketch_args: &cli::SketchArgs,
+    stats: &[(String, usize)],
+) -> anyhow::Result<u8> {
+    if sketch_args.target_precision.is_some() {
+        anyhow::bail!(
+            "--target-precision is not implemented yet; use -k/--kmer and -s/--size directly for now"
+        );
+    }
+
+    if let Some(km) = sketch_args.kmer {
         println!("User-defined k-mer size: {}", km);
-        km
+        Ok(km)
     } else {
         let mean_genome_size =
             (stats.iter().map(|x| x.1 as u64).sum::<u64>() / stats.len() as u64) as u32;
@@ -224,7 +284,7 @@ pub fn determine_kmer_size(args: &cli::BuildArgs, stats: &[(String, usize)]) -> 
             format_genome_size(mean_genome_size as usize),
             kmer_size
         );
-        kmer_size
+        Ok(kmer_size)
     }
 }
 
@@ -246,6 +306,8 @@ mod tests {
     fn test_format_genome_size() {
         // Below 1 Kb: no approximation suffix.
         assert_eq!(format_genome_size(500), "500 bp ");
+        // Kb branch: this used to print "(~true Kb)" — a `bool` was being
+        // formatted instead of the actual kilobase value.
         assert_eq!(format_genome_size(2_500), "2500 bp (~2.5 Kb)");
         assert_eq!(format_genome_size(3_400_000), "3400000 bp (~3.4 Mb)");
         assert_eq!(format_genome_size(5_200_000_000), "5200000000 bp (~5.2 Gb)");

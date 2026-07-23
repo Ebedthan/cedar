@@ -1,3 +1,8 @@
+// Copyright 2024-2025 Anicet Ebou.
+// Licensed under the MIT license (http://opensource.org/licenses/MIT)
+// This file may not be copied, modified, or distributed except according
+// to those terms.
+
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 use std::fs;
@@ -45,10 +50,10 @@ pub fn build_tree_using_mash_distance(args: &cli::BuildArgs, threads: usize) -> 
     utils::check_genome_outliers(&stats, config.outlier_threshold)?;
 
     // Determine k-mer size
-    let kmer_size = utils::determine_kmer_size(args, &stats);
+    let kmer_size = utils::determine_kmer_size(&args.sketch, &stats)?;
 
     // Create sketches
-    let sketches = sketch::create_and_load_sketches(args, kmer_size)?;
+    let sketches = sketch::create_and_load_sketches(&args.indir, &args.sketch, kmer_size)?;
 
     // Build tree
     let tree_algorithm = dist::TreeAlgorithm::from_cli(args.canonical, config.threads);
@@ -77,6 +82,44 @@ pub fn build_tree_using_mash_distance(args: &cli::BuildArgs, threads: usize) -> 
     } else {
         bootstrap::build_single_tree(sketches, &tree_algorithm, args)
     }
+}
+
+/// `cedar dist`: compute pairwise Mash distances annotated with an
+/// uncertainty estimate on each one. No tree is built — this is for the
+/// "is this pair a solid species-boundary call" moment, not for producing
+/// a phylogeny.
+pub fn compute_pairwise_distances(args: &cli::DistArgs) -> Result<()> {
+    // Validate and collect input files
+    let inputs = validate_and_collect_inputs(&args.indir)?;
+
+    // Compute genome statistics and flag genome-size outliers up front —
+    // an outlier genome size undermines the k-mer size choice for every
+    // pairwise distance computed from it, exactly as it would for `build`.
+    let stats = utils::compute_genome_stats(&inputs)?;
+    utils::check_genome_outliers(&stats, PhyloConfig::default().outlier_threshold)?;
+
+    // Determine k-mer size: manual override, or the same default heuristic
+    // `build` uses. `--target-precision`-driven selection isn't implemented
+    // yet, so it's rejected explicitly here rather than silently ignored.
+    let kmer_size = utils::determine_kmer_size(&args.sketch, &stats)?;
+
+    // Create sketches
+    let sketches = sketch::create_and_load_sketches(&args.indir, &args.sketch, kmer_size)?;
+
+    // Compute pairwise distances, each with an uncertainty estimate
+    let estimates = dist::compute_distances_with_uncertainty(sketches);
+
+    let flagged = estimates
+        .iter()
+        .filter(|e| e.reliability != dist::Reliability::Reliable)
+        .count();
+    println!(
+        "{} pairwise distances computed ({} flagged as borderline, unreliable, or lacking shared hashes)",
+        estimates.len(),
+        flagged
+    );
+
+    utils::output_distance_table(args.output.clone(), &estimates)
 }
 
 // Validate input files and collect them efficiently
