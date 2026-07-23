@@ -184,11 +184,7 @@ pub fn sample_sketches_without_replacement(sketches: Vec<Sketch>, proportion: f6
         .map(|sketch| {
             let keep = ((sketch.hashes.len() as f64) * proportion).round() as usize;
             let keep = keep.clamp(1, sketch.hashes.len().max(1));
-            let sampled: Vec<_> = sketch
-                .hashes
-                .choose_multiple(&mut rng, keep)
-                .cloned()
-                .collect();
+            let sampled: Vec<_> = sketch.hashes.sample(&mut rng, keep).cloned().collect();
 
             Sketch {
                 hashes: sampled,
