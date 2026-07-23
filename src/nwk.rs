@@ -1,16 +1,9 @@
-// Copyright 2024-2026 Anicet Ebou.
-// Licensed under the MIT license (http://opensource.org/licenses/MIT)
-// This file may not be copied, modified, or distributed except according
-// to those terms.
-
 /// Newick Format Minimal Tree Parser Module
 ///
 /// This module contains function to reads a tree from a newick file
 /// and store the result as a tree struct. It also provide convenient
 /// functions to output newick format from a tree struct and simple functions
 /// to read node of a tree (into `Node` struct) and clade of a tree (into `Clade` struct).
-///
-///
 use std::{
     collections::{HashMap, HashSet},
     str::Chars,

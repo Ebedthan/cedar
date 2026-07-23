@@ -1,8 +1,3 @@
-// Copyright 2024-2025 Anicet Ebou.
-// Licensed under the MIT license (http://opensource.org/licenses/MIT)
-// This file may not be copied, modified, or distributed except according
-// to those terms.
-
 use crate::build::sketch;
 use crate::cli;
 use rayon::prelude::*;
@@ -140,7 +135,7 @@ pub fn format_genome_size(size: usize) -> String {
         let mb = size as f64 / 1_000_000.0;
         format!("(~{:.1} Mb)", mb)
     } else if size >= 1_000 {
-        let kb = size as f64 >= 1_000.0;
+        let kb = size as f64 / 1_000.0;
         format!("(~{:.1} Kb)", kb)
     } else {
         "".to_string()
@@ -233,21 +228,6 @@ pub fn determine_kmer_size(args: &cli::BuildArgs, stats: &[(String, usize)]) -> 
     }
 }
 
-pub fn check_required_tools() -> anyhow::Result<()> {
-    let deps = ["mafft", "iqtree3", "trimal"];
-
-    for dep in &deps {
-        match which::which(dep) {
-            Ok(path) => {
-                println!("✅ Found {} at {}", dep, path.display());
-            }
-            Err(_) => return Err(anyhow::anyhow!("❌ {} not found in PATH", dep)),
-        }
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,5 +240,14 @@ mod tests {
     #[test]
     fn test_is_fasta_format_not_ok() {
         assert!(!is_fasta_format(&PathBuf::from("test/test.fq")));
+    }
+
+    #[test]
+    fn test_format_genome_size() {
+        // Below 1 Kb: no approximation suffix.
+        assert_eq!(format_genome_size(500), "500 bp ");
+        assert_eq!(format_genome_size(2_500), "2500 bp (~2.5 Kb)");
+        assert_eq!(format_genome_size(3_400_000), "3400000 bp (~3.4 Mb)");
+        assert_eq!(format_genome_size(5_200_000_000), "5200000000 bp (~5.2 Gb)");
     }
 }

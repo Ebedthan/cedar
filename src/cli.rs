@@ -1,24 +1,17 @@
-// Copyright 2024-2026 Anicet Ebou.
-// Licensed under the MIT license (http://opensource.org/licenses/MIT)
-// This file may not be copied, modified, or distributed except according
-// to those terms.
-
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(
     name = "cedar",
-    about = "a phylogenomic toolkit",
+    about = "Uncertainty-aware distance-based phylogenomics from Mash sketches",
     author,
     version,
     arg_required_else_help = true
 )]
 pub struct Cli {
-    /// Number of threads to use
     #[arg(short, default_value_t = 1, value_name = "INT")]
     pub threads: usize,
 
-    /// Add verbosity to program
     #[arg(short = 'v', long, action = clap::ArgAction::SetTrue)]
     pub verbose: bool,
 
@@ -28,39 +21,27 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Phylogenetic tree building
+    /// Build a Mash-distance neighbor-joining tree
     Build(BuildArgs),
-
-    /// Compare trees
-    Compare(CompareArgs),
+    // `Compare` intentionally omitted until it's implemented — see roadmap.
 }
+
 #[derive(Args, Debug)]
 pub struct BuildArgs {
     /// Input directory containing FASTA files
     #[arg(value_name = "DIR")]
     pub indir: String,
 
-    /// Build tree using mash distance
-    #[arg(long, conflicts_with = "ortholog", help_heading = "Tree building mode")]
-    pub mash: bool,
-
-    /// Treat input files as orthologous groups
-    #[arg(long, help_heading = "Tree building mode")]
-    pub ortholog: bool,
-
     /// Output tree (Newick format) to FILE
     #[arg(short, value_name = "FILE")]
     pub output: Option<String>,
-
-    /// Intermediate files directory.
-    #[arg(long, value_name = "DIR")]
-    pub tempdir: Option<String>,
 
     /// Bootstrap replicates
     #[arg(
         short = 'B',
         long = "boot",
         value_name = "INT",
+        conflicts_with = "jacknife",
         help_heading = "Tree options"
     )]
     pub bootstrap: Option<usize>,
@@ -70,6 +51,7 @@ pub struct BuildArgs {
         short = 'J',
         long = "jack",
         value_name = "INT",
+        conflicts_with = "bootstrap",
         help_heading = "Tree options"
     )]
     pub jacknife: Option<usize>,
@@ -116,6 +98,3 @@ pub struct BuildArgs {
     )]
     pub kmer: Option<u8>,
 }
-
-#[derive(Args, Debug)]
-pub struct CompareArgs {}

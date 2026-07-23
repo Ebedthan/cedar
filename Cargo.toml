@@ -12,8 +12,6 @@ itertools = "0.12.1"
 speedytree = "0.1.0"
 rayon = "1"
 rand = "0.9"
-which = "8"
-subprocess = "0.2.9"
 regex = "1.11"
 
 [dev-dependencies]

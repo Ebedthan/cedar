@@ -1,8 +1,3 @@
-// Copyright 2024-2026 Anicet Ebou.
-// Licensed under the MIT license (http://opensource.org/licenses/MIT)
-// This file may not be copied, modified, or distributed except according
-// to those terms.
-
 use crate::{
     build::dist::{self, ComputeTree, TreeAlgorithm},
     cli,
@@ -63,7 +58,7 @@ fn majority_rule(clades: Vec<Clade>, threshold: usize, n_trees: usize) -> Vec<Cl
 
 /// Two clades are compatible (can coexist in the same tree) only if their
 /// leaf sets are nested (one a subset of the other) or disjoint. Clades that
-/// partially overlap cannot both appear in a valid tree, accepting both
+/// partially overlap cannot both appear in a valid tree — accepting both
 /// would require duplicating a leaf under two different branches.
 fn is_compatible(a: &Clade, b: &Clade) -> bool {
     let a_set: HashSet<&String> = a.leaves.iter().collect();
@@ -155,27 +150,52 @@ fn get_leaf_names(node: &Node) -> Vec<String> {
     leaves
 }
 
-/// Sample sequences sketches with replacement
-/// Returns a new vec of sampled sketches
-pub fn sample_sketches_with_replacement(sketches: Vec<Sketch>, sample_size: usize) -> Vec<Sketch> {
+/// Sample each sketch's own hashes with replacement, resampling every
+/// sketch to its own current size.
+/// This is the standard nonparametric bootstrap resampling method.
+pub fn sample_sketches_with_replacement(sketches: Vec<Sketch>) -> Vec<Sketch> {
     let mut rng = rng();
-    let mut bootstraped = Vec::new();
 
-    for sketch in sketches {
-        bootstraped.push(Sketch {
-            name: sketch.name.clone(),
-            seq_length: sketch.seq_length,
-            num_valid_kmers: sketch.num_valid_kmers,
-            comment: sketch.comment.clone(),
-            filter_params: sketch.filter_params,
-            sketch_params: sketch.sketch_params,
-            hashes: (0..sample_size)
+    sketches
+        .into_iter()
+        .map(|sketch| {
+            let n = sketch.hashes.len();
+            let sampled: Vec<_> = (0..n)
                 .map(|_| sketch.hashes.choose(&mut rng).unwrap().clone())
-                .collect(),
-        });
-    }
+                .collect();
 
-    bootstraped
+            Sketch {
+                hashes: sampled,
+                ..sketch
+            }
+        })
+        .collect()
+}
+
+/// Subsample each sketch's hashes *without* replacement, keeping a fixed
+/// proportion of them, the jackknife counterpart to
+/// `sample_sketches_with_replacement`'s bootstrap resampling. A sketch never
+/// has fewer than 1 hash kept, even if `proportion` would round down to 0.
+pub fn sample_sketches_without_replacement(sketches: Vec<Sketch>, proportion: f64) -> Vec<Sketch> {
+    let mut rng = rng();
+
+    sketches
+        .into_iter()
+        .map(|sketch| {
+            let keep = ((sketch.hashes.len() as f64) * proportion).round() as usize;
+            let keep = keep.clamp(1, sketch.hashes.len().max(1));
+            let sampled: Vec<_> = sketch
+                .hashes
+                .choose_multiple(&mut rng, keep)
+                .cloned()
+                .collect();
+
+            Sketch {
+                hashes: sampled,
+                ..sketch
+            }
+        })
+        .collect()
 }
 
 pub fn build_bootstrap_tree(
@@ -187,11 +207,7 @@ pub fn build_bootstrap_tree(
     let trees: anyhow::Result<Vec<Tree>> = (0..reps)
         .into_par_iter()
         .map(|_| -> anyhow::Result<Tree> {
-            // TODO(phase0-next): hardcoded 1000 ignores the user-configured
-            // sketch size (`args.size`); should resample at each sketch's own
-            // length. Left as-is here — this fix is scoped to the consensus
-            // tree/support bug only.
-            let tmp_sketches = sample_sketches_with_replacement(sketches.clone(), 1000);
+            let tmp_sketches = sample_sketches_with_replacement(sketches.clone());
             let tmp_distance = dist::compute_distances(tmp_sketches);
             let tmp_matrix = dist::distance_to_matrix(tmp_distance);
             let tmp_tree_newick = tmp_matrix.compute_newick_tree(tree_algorithm)?;
@@ -205,6 +221,39 @@ pub fn build_bootstrap_tree(
     // replicate trees to be kept. Using `reps` itself here would require a
     // clade to appear in *every* replicate (strict/unanimous consensus),
     // which collapses to a near-unresolved tree on real data.
+    let majority_threshold = reps / 2 + 1;
+    let consensus_tree = build_consensus(trees, majority_threshold);
+    utils::output_tree(output, consensus_tree.to_newick())
+}
+
+pub fn build_jackknife_tree(
+    sketches: Vec<Sketch>,
+    reps: usize,
+    proportion: f64,
+    tree_algorithm: &TreeAlgorithm,
+    output: Option<String>,
+) -> anyhow::Result<()> {
+    if !(proportion > 0.0 && proportion < 1.0) {
+        anyhow::bail!(
+            "jackknife subsampling proportion must be strictly between 0 and 1, got {}",
+            proportion
+        );
+    }
+
+    let trees: anyhow::Result<Vec<Tree>> = (0..reps)
+        .into_par_iter()
+        .map(|_| -> anyhow::Result<Tree> {
+            let tmp_sketches = sample_sketches_without_replacement(sketches.clone(), proportion);
+            let tmp_distance = dist::compute_distances(tmp_sketches);
+            let tmp_matrix = dist::distance_to_matrix(tmp_distance);
+            let tmp_tree_newick = tmp_matrix.compute_newick_tree(tree_algorithm)?;
+            Tree::from_newick(&tmp_tree_newick)
+                .map_err(|e| anyhow::anyhow!("Tree parsing error: {}", e))
+        })
+        .collect();
+
+    let trees = trees?;
+    // Same majority-rule reasoning as the bootstrap path above.
     let majority_threshold = reps / 2 + 1;
     let consensus_tree = build_consensus(trees, majority_threshold);
     utils::output_tree(output, consensus_tree.to_newick())
@@ -404,6 +453,68 @@ mod tests {
     }
 
     #[test]
+    fn test_jackknife_proportion_validation() {
+        // proportion must be strictly between 0 and 1; out-of-range values
+        // should fail fast rather than silently keep 0 or all hashes.
+        assert!(
+            build_jackknife_tree(vec![], 5, 1.5, &dist::TreeAlgorithm::Canonical, None).is_err()
+        );
+        assert!(
+            build_jackknife_tree(vec![], 5, 0.0, &dist::TreeAlgorithm::Canonical, None).is_err()
+        );
+        assert!(
+            build_jackknife_tree(vec![], 5, 1.0, &dist::TreeAlgorithm::Canonical, None).is_err()
+        );
+        assert!(
+            build_jackknife_tree(vec![], 5, -0.1, &dist::TreeAlgorithm::Canonical, None).is_err()
+        );
+    }
+
+    fn make_test_sketch(name: &str, n_hashes: u64) -> Sketch {
+        Sketch {
+            name: name.to_string(),
+            seq_length: n_hashes * 21,
+            num_valid_kmers: n_hashes,
+            comment: String::new(),
+            hashes: (0..n_hashes)
+                .map(|h| finch::sketch_schemes::KmerCount {
+                    hash: h,
+                    kmer: Vec::new(),
+                    count: 1,
+                    extra_count: 0,
+                    label: None,
+                })
+                .collect(),
+            filter_params: finch::filtering::FilterParams::default(),
+            sketch_params: finch::sketch_schemes::SketchParams::default(),
+        }
+    }
+
+    #[test]
+    fn test_sample_sketches_without_replacement_keeps_proportion() {
+        let sketches = vec![make_test_sketch("genome1", 1000)];
+        let sampled = sample_sketches_without_replacement(sketches, 0.5);
+
+        assert_eq!(sampled.len(), 1);
+        assert_eq!(sampled[0].hashes.len(), 500);
+        assert_eq!(sampled[0].name, "genome1");
+
+        // sampling is without replacement: no duplicate hash values
+        let unique: HashSet<_> = sampled[0].hashes.iter().map(|k| k.hash).collect();
+        assert_eq!(unique.len(), 500);
+    }
+
+    #[test]
+    fn test_sample_sketches_without_replacement_never_keeps_zero() {
+        // A tiny sketch with a very small proportion should still keep at
+        // least 1 hash rather than rounding down to an empty sketch.
+        let sketches = vec![make_test_sketch("genome1", 3)];
+        let sampled = sample_sketches_without_replacement(sketches, 0.1);
+
+        assert_eq!(sampled[0].hashes.len(), 1);
+    }
+
+    #[test]
     fn test_newick_parsing_edge_cases() {
         // Test names without branch lengths
         let result = Tree::from_newick("(A,B);");
@@ -437,5 +548,28 @@ mod tests {
         }
         let consensus = build_consensus(trees, 3);
         println!("{}", consensus.to_newick());
+    }
+
+    #[test]
+    fn test_sample_sketches_with_replacement_preserves_own_size() {
+        let sketches = vec![make_test_sketch("genome1", 1000)];
+        let sampled = sample_sketches_with_replacement(sketches);
+
+        assert_eq!(sampled.len(), 1);
+        assert_eq!(sampled[0].hashes.len(), 1000);
+        assert_eq!(sampled[0].name, "genome1");
+    }
+
+    #[test]
+    fn test_sample_sketches_with_replacement_respects_each_sketchs_own_size() {
+        // Sketches of different lengths must each be resampled to their own
+        // length, not forced to one shared/global size.
+        let sketches = vec![make_test_sketch("small", 10), make_test_sketch("big", 500)];
+        let sampled = sample_sketches_with_replacement(sketches);
+
+        let small = sampled.iter().find(|s| s.name == "small").unwrap();
+        let big = sampled.iter().find(|s| s.name == "big").unwrap();
+        assert_eq!(small.hashes.len(), 10);
+        assert_eq!(big.hashes.len(), 500);
     }
 }

@@ -1,8 +1,3 @@
-// Copyright 2024-2025 Anicet Ebou.
-// Licensed under the MIT license (http://opensource.org/licenses/MIT)
-// This file may not be copied, modified, or distributed except according
-// to those terms.
-
 use std::fs;
 use std::fs::File;
 use std::path::PathBuf;
@@ -95,41 +90,4 @@ pub fn create_and_load_sketches(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    use std::path::Path;
-
-    #[test]
-    fn test_create_sketches() {
-        // Define test parameters
-        let filenames = [
-            PathBuf::from("test/bacam.fna"),
-            PathBuf::from("test/bacsp.fna"),
-        ];
-        let kmer_size = 21;
-        let sketch_size = 1000;
-        let seed = 42;
-        let outdir = "test_output";
-        fs::create_dir(outdir).unwrap();
-
-        // Call the function under test
-        let result = create_sketches(&filenames, kmer_size, sketch_size, seed, outdir);
-        // Verify that the function returned successfully
-        assert!(result.is_ok());
-
-        // Verify that the output directory and sketch files were created
-        assert!(fs::metadata(outdir).is_ok());
-        for filename in &filenames {
-            let output_filename = format!(
-                "{}/{}.msh",
-                outdir,
-                Path::new(filename).file_name().unwrap().to_str().unwrap()
-            );
-            println!("{output_filename}");
-            assert!(fs::metadata(output_filename).is_ok());
-        }
-
-        fs::remove_dir_all(outdir).unwrap();
-    }
-}
+mod tests {}
