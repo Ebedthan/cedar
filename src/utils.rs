@@ -59,14 +59,14 @@ pub fn output_distance_table(
     };
 
     writeln!(
-            writer,
-            "genome1\tgenome2\tjaccard\tjaccard_ci_95_low\tjaccard_ci_95_high\tmash_distance\tmash_distance_ci_95_low\tmash_distance_ci_95_high\tshared_hashes\ttotal_hashes\trelative_uncertainty\tflag"
-        )?;
+        writer,
+        "genome1\tgenome2\tjaccard\tjaccard_ci_95_low\tjaccard_ci_95_high\tmash_distance\tmash_distance_ci_95_low\tmash_distance_ci_95_high\tshared_hashes\ttotal_hashes\trelative_uncertainty\tflag\tkmer_size_used\trescued"
+    )?;
 
     for e in estimates {
         writeln!(
             writer,
-            "{}\t{}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}",
             e.query,
             e.reference,
             e.jaccard,
@@ -79,6 +79,8 @@ pub fn output_distance_table(
             e.total_hashes,
             fmt_opt(e.relative_uncertainty),
             e.reliability,
+            e.kmer_size_used,
+            e.rescued,
         )?;
     }
 

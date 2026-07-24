@@ -107,7 +107,8 @@ pub fn compute_pairwise_distances(args: &cli::DistArgs) -> Result<()> {
     let sketches = sketch::create_and_load_sketches(&args.indir, &args.sketch, kmer_size)?;
 
     // Compute pairwise distances, each with an uncertainty estimate
-    let estimates = dist::compute_distances_with_uncertainty(sketches);
+    let estimates =
+        dist::compute_distances_with_uncertainty(sketches, args.sketch.size, args.sketch.seed);
 
     let flagged = estimates
         .iter()
