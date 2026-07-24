@@ -259,3 +259,16 @@ fn min_sketch_size_for_precision(
     }
     Some(hi)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rescue_kmer_candidates_always_includes_floor() {
+        assert_eq!(rescue_kmer_candidates(21, 14), vec![19, 17, 15, 14]);
+        assert_eq!(rescue_kmer_candidates(15, 14), vec![14]);
+        assert_eq!(rescue_kmer_candidates(21, 21), Vec::<u8>::new());
+        assert_eq!(rescue_kmer_candidates(14, 15), Vec::<u8>::new());
+    }
+}

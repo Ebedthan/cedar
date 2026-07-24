@@ -29,3 +29,27 @@ pub fn compute_distances(sketches: Vec<Sketch>) -> Vec<SketchDistance> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    // Test compute_distances function
+    #[test]
+    fn test_compute_distances() {
+        let mut sketches = Vec::new();
+        for file in fs::read_dir("test/sketches").unwrap() {
+            sketches.push(finch::open_sketch_file(file.unwrap().path()).unwrap());
+        }
+        let distances = compute_distances(sketches.into_iter().flatten().collect_vec());
+
+        // Assert that the number of distances is correct
+        assert_eq!(distances.len(), 3);
+
+        // Assert that each distance is computed correctly
+        for distance in &distances {
+            assert!(distance.mash_distance <= 1.0);
+        }
+    }
+}

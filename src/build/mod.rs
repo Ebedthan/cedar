@@ -3,25 +3,21 @@
 // This file may not be copied, modified, or distributed except according
 // to those terms.
 
-use anyhow::{Context, Result};
-use rayon::prelude::*;
-use std::fs;
-use std::path::PathBuf;
+use anyhow::Result;
 
 use crate::cli;
 use crate::utils;
 
 mod bootstrap;
 pub mod connectivity;
-pub mod dist;
 pub mod matrix;
 use finch::serialization::Sketch;
 
+use crate::build::connectivity::connectivity_edges;
 use crate::build::matrix::TreeAlgorithm;
-use crate::dist::rescue::{compute_distances_with_uncertainty, rescue_kmer_candidates};
+use crate::dist::rescue::rescue_kmer_candidates;
 use crate::mash::sketch::{create_and_load_sketches, k_computing};
 use crate::mash::uncertainty::compute_base_distances_with_uncertainty;
-use crate::mash::uncertainty::Reliability;
 
 /// Configuration for phylogenetic analysis
 #[derive(Debug, Clone)]
@@ -37,7 +33,7 @@ impl Default for PhyloConfig {
         Self {
             threads: 1,
             bootstrap_reps: 1000,
-            outlier_threshold: 0.01,
+            outlier_threshold: utils::DEFAULT_OUTLIER_THRESHOLD,
             buffer_size: 8192, // 8KB
         }
     }
@@ -88,7 +84,7 @@ fn resolve_connectivity_with_smaller_kmer(
     for (i, &k) in candidates.iter().enumerate() {
         let sketches = create_and_load_sketches(indir, sketch_args.size, sketch_args.seed, k)?;
         let base_estimates = compute_base_distances_with_uncertainty(sketches.clone());
-        let edges = dist::connectivity_edges(&base_estimates, &sketches, k);
+        let edges = connectivity_edges(&base_estimates, &sketches, k);
         let load_bearing = connectivity::analyze_connectivity(&edges);
 
         if load_bearing.is_empty() {
@@ -121,7 +117,7 @@ pub fn build_tree_using_mash_distance(args: &cli::BuildArgs, threads: usize) -> 
     };
 
     // Validate and collect input files
-    let inputs = validate_and_collect_inputs(&args.indir)?;
+    let inputs = utils::validate_and_collect_inputs(&args.indir)?;
 
     // Compute genome statistics in parallel and genome size outliers
     let stats = utils::compute_genome_stats(&inputs)?;
@@ -138,7 +134,7 @@ pub fn build_tree_using_mash_distance(args: &cli::BuildArgs, threads: usize) -> 
     // and check whether excluding divergent pairs would still leave
     // every genome connected via resolvable data alone.
     let base_estimates = compute_base_distances_with_uncertainty(sketches.clone());
-    let edges = dist::connectivity_edges(&base_estimates, &sketches, kmer_size);
+    let edges = connectivity_edges(&base_estimates, &sketches, kmer_size);
     let load_bearing = connectivity::analyze_connectivity(&edges);
 
     if !load_bearing.is_empty() {
@@ -175,17 +171,17 @@ pub fn build_tree_using_mash_distance(args: &cli::BuildArgs, threads: usize) -> 
             sketches = resolution.sketches;
         } else {
             println!(
-                "Excluding {} divergent pair(s) that are load-bearing for connectivty: ",
+                "Warning: {} divergent pair(s) are load-bearing for connectivity and will \
+                still be used in the tree (NJ requires a complete distance matrix, so these \
+                pairs can't simply be dropped). Treat branches resting on them with caution:",
                 load_bearing.len()
             );
             for (q, r) in &load_bearing {
-                println!("  -  {} vs {}", q, r);
+                println!("  - {} vs {}", q, r);
             }
             println!(
-                "These pairs are the only thing connecting some genomes to the rest of the \
-                dataset via resolvable data. Excluding them may still produce a valid tree \
-                (NJ can use the remaining edges), but rerun with --include-div-pairs to \
-                attempt resolving them with a smaller k-mer size instead."
+                "Rerun with --include-div-pairs to attempt resolving them with a smaller \
+                             k-mer size instead."
             );
         }
     }
@@ -219,92 +215,120 @@ pub fn build_tree_using_mash_distance(args: &cli::BuildArgs, threads: usize) -> 
     }
 }
 
-/// `cedar dist`: compute pairwise Mash distances annotated with an
-/// uncertainty estimate on each one. No tree is built — this is for the
-/// "is this pair a solid species-boundary call" moment, not for producing
-/// a phylogeny.
-pub fn compute_pairwise_distances(args: &cli::DistArgs) -> Result<()> {
-    // Validate and collect input files
-    let inputs = validate_and_collect_inputs(&args.indir)?;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use finch::filtering::FilterParams;
+    use finch::sketch_schemes::{KmerCount, SketchParams};
 
-    // Compute genome statistics and flag genome-size outliers up front —
-    // an outlier genome size undermines the k-mer size choice for every
-    // pairwise distance computed from it, exactly as it would for `build`.
-    let stats = utils::compute_genome_stats(&inputs)?;
-    utils::check_genome_outliers(&stats, PhyloConfig::default().outlier_threshold)?;
+    #[test]
+    fn test_phylo_config_defaults() {
+        let config = PhyloConfig::default();
+        assert_eq!(config.threads, 1);
+        assert_eq!(config.bootstrap_reps, 1000);
+        assert_eq!(config.outlier_threshold, utils::DEFAULT_OUTLIER_THRESHOLD);
+        assert_eq!(config.buffer_size, 8192);
+    }
 
-    // Determine k-mer size: manual override, or the same default heuristic
-    // `build` uses. `--target-precision`-driven selection isn't implemented
-    // yet, so it's rejected explicitly here rather than silently ignored.
-    let kmer_size = utils::determine_kmer_size(&args.sketch, &stats)?;
+    /// Hand-builds a sketch with a controlled overlap structure: `shared_range`
+    /// hashes are common ground for building known Jaccard values against
+    /// other sketches, plus `unique_count` hashes starting at `unique_offset`
+    /// that are exclusive to this genome. Verified against real
+    /// `finch::distance::distance()` before writing this: with sketches all
+    /// the same size, this construction reliably produces
+    /// jaccard = |shared_range| / sketch_size for any two genomes sharing
+    /// the same `shared_range`, as long as each genome's `unique_offset` is
+    /// far enough apart that unique ranges never collide or interleave.
+    fn make_sketch(
+        name: &str,
+        shared_range: std::ops::Range<u64>,
+        unique_offset: u64,
+        unique_count: u64,
+        seq_length: u64,
+    ) -> Sketch {
+        let mut hashes: Vec<KmerCount> = shared_range
+            .map(|h| KmerCount {
+                hash: h,
+                kmer: vec![],
+                count: 1,
+                extra_count: 0,
+                label: None,
+            })
+            .collect();
+        hashes.extend((0..unique_count).map(|i| KmerCount {
+            hash: unique_offset + i,
+            kmer: vec![],
+            count: 1,
+            extra_count: 0,
+            label: None,
+        }));
+        hashes.sort_by_key(|k| k.hash); // sortedness is a documented invariant of finch's raw_distance
 
-    // Create sketches
-    let sketches =
-        create_and_load_sketches(&args.indir, args.sketch.size, args.sketch.seed, kmer_size)?;
+        Sketch {
+            name: name.to_string(),
+            seq_length,
+            num_valid_kmers: hashes.len() as u64,
+            comment: String::new(),
+            hashes,
+            filter_params: FilterParams::default(),
+            sketch_params: SketchParams::Mash {
+                kmers_to_sketch: 1000,
+                final_size: 1000,
+                no_strict: false,
+                kmer_length: 21,
+                hash_seed: 42,
+            },
+        }
+    }
 
-    // Compute pairwise distances, each with an uncertainty estimate
-    let estimates =
-        compute_distances_with_uncertainty(sketches, args.sketch.size, args.sketch.seed);
+    #[test]
+    fn test_connectivity_pipeline_flags_exactly_one_isolated_genome() {
+        // Four genomes (A,B,C,D) mutually share 950/1000 hashes (J=0.95,
+        // tightly Reliable). A fifth genome E shares only 5/1000 with each
+        // of them (J=0.005, Unreliable) -- E is only reachable through
+        // divergent pairs. This exercises the real pipeline
+        // (compute_base_distances_with_uncertainty -> connectivity_edges
+        // -> analyze_connectivity) end to end on real Sketch/finch
+        // distance computation, not mocked Edge/DistanceEstimate values.
+        let sketches = vec![
+            make_sketch("A", 0..950, 1_000_000, 50, 5_000_000),
+            make_sketch("B", 0..950, 2_000_000, 50, 5_000_000),
+            make_sketch("C", 0..950, 3_000_000, 50, 5_000_000),
+            make_sketch("D", 0..950, 4_000_000, 50, 5_000_000),
+            make_sketch("E", 0..5, 9_000_000, 995, 5_000_000),
+        ];
 
-    let flagged = estimates
-        .iter()
-        .filter(|e| e.reliability != Reliability::Reliable)
-        .count();
-    println!(
-        "{} pairwise distances computed ({} flagged as borderline, unreliable, or lacking shared hashes)",
-        estimates.len(),
-        flagged
-    );
+        let base_estimates = compute_base_distances_with_uncertainty(sketches.clone());
+        let edges = connectivity_edges(&base_estimates, &sketches, 21);
+        let load_bearing = connectivity::analyze_connectivity(&edges);
 
-    utils::output_distance_table(args.output.clone(), &estimates)
-}
-
-// Validate input files and collect them efficiently
-fn validate_and_collect_inputs(indir: &str) -> Result<Vec<PathBuf>> {
-    let entries: Vec<_> = fs::read_dir(indir)
-        .with_context(|| format!("Failed to read directory: {}", indir))?
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let (valid_files, validation_results): (Vec<_>, Vec<_>) = entries
-        .into_par_iter()
-        .map(|entry| {
-            let path = entry.path();
-            let is_valid = utils::is_fasta_format(&path);
-            let is_multi = if is_valid {
-                utils::is_multi_fasta(&path)
-            } else {
-                false
-            };
-            (path, (is_valid, is_multi))
-        })
-        .unzip();
-
-    // Check for validation errors
-    let invalid_files: Vec<_> = valid_files
-        .iter()
-        .zip(validation_results.iter())
-        .filter_map(|(path, (is_valid, _))| if !is_valid { Some(path) } else { None })
-        .collect();
-
-    if !invalid_files.is_empty() {
-        anyhow::bail!(
-            "Input validation error: Only FASTA files are allowed. Invalid files: {:?}",
-            invalid_files
+        assert_eq!(
+            load_bearing.len(),
+            1,
+            "expected exactly one load-bearing bridge for E"
+        );
+        assert!(
+            load_bearing[0].0 == "E" || load_bearing[0].1 == "E",
+            "expected E in the load-bearing pair, got {:?}",
+            load_bearing[0]
         );
     }
 
-    let multi_seq_files: Vec<_> = valid_files
-        .iter()
-        .zip(validation_results.iter())
-        .filter_map(|(path, (_, is_multi))| if *is_multi { Some(path) } else { None })
-        .collect();
+    #[test]
+    fn test_connectivity_pipeline_finds_no_load_bearing_pairs_when_fully_resolvable() {
+        // Same four mutually-resolvable genomes, no isolated fifth genome:
+        // connectivity should need zero divergent pairs.
+        let sketches = vec![
+            make_sketch("A", 0..950, 1_000_000, 50, 5_000_000),
+            make_sketch("B", 0..950, 2_000_000, 50, 5_000_000),
+            make_sketch("C", 0..950, 3_000_000, 50, 5_000_000),
+            make_sketch("D", 0..950, 4_000_000, 50, 5_000_000),
+        ];
 
-    if !multi_seq_files.is_empty() {
-        anyhow::bail!(
-            "Input validation error: Multi-sequence FASTA files detected: {:?}",
-            multi_seq_files
-        );
+        let base_estimates = compute_base_distances_with_uncertainty(sketches.clone());
+        let edges = connectivity_edges(&base_estimates, &sketches, 21);
+        let load_bearing = connectivity::analyze_connectivity(&edges);
+
+        assert!(load_bearing.is_empty());
     }
-
-    Ok(valid_files)
 }

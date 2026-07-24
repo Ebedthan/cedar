@@ -16,8 +16,7 @@ use clap::Parser;
 use anyhow::Result;
 
 use crate::{
-    build::{build_tree_using_mash_distance, compute_pairwise_distances},
-    cli::Commands,
+    build::build_tree_using_mash_distance, cli::Commands, dist::compute_pairwise_distances,
     utils::init_rayon_pool,
 };
 

@@ -6,6 +6,7 @@
 use crate::cli;
 use crate::mash::sketch::k_computing;
 use crate::mash::uncertainty::DistanceEstimate;
+use anyhow::{Context, Result};
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 use std::fs::{self, File};
@@ -15,6 +16,11 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
 use std::sync::Once;
+
+/// Default relative-deviation threshold for flagging a genome-size
+/// outlier, shared between `build` and `dist` (which otherwise has no
+/// reason to depend on `build::PhyloConfig` for a single constant).
+pub const DEFAULT_OUTLIER_THRESHOLD: f64 = 0.01;
 
 static INIT_RAYON: Once = Once::new();
 
@@ -288,6 +294,56 @@ pub fn determine_kmer_size(
         );
         Ok(kmer_size)
     }
+}
+
+// Validate input files and collect them efficiently
+pub fn validate_and_collect_inputs(indir: &str) -> Result<Vec<PathBuf>> {
+    let entries: Vec<_> = fs::read_dir(indir)
+        .with_context(|| format!("Failed to read directory: {}", indir))?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let (valid_files, validation_results): (Vec<_>, Vec<_>) = entries
+        .into_par_iter()
+        .map(|entry| {
+            let path = entry.path();
+            let is_valid = is_fasta_format(&path);
+            let is_multi = if is_valid {
+                is_multi_fasta(&path)
+            } else {
+                false
+            };
+            (path, (is_valid, is_multi))
+        })
+        .unzip();
+
+    // Check for validation errors
+    let invalid_files: Vec<_> = valid_files
+        .iter()
+        .zip(validation_results.iter())
+        .filter_map(|(path, (is_valid, _))| if !is_valid { Some(path) } else { None })
+        .collect();
+
+    if !invalid_files.is_empty() {
+        anyhow::bail!(
+            "Input validation error: Only FASTA files are allowed. Invalid files: {:?}",
+            invalid_files
+        );
+    }
+
+    let multi_seq_files: Vec<_> = valid_files
+        .iter()
+        .zip(validation_results.iter())
+        .filter_map(|(path, (_, is_multi))| if *is_multi { Some(path) } else { None })
+        .collect();
+
+    if !multi_seq_files.is_empty() {
+        anyhow::bail!(
+            "Input validation error: Multi-sequence FASTA files detected: {:?}",
+            multi_seq_files
+        );
+    }
+
+    Ok(valid_files)
 }
 
 #[cfg(test)]
