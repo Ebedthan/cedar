@@ -12,6 +12,7 @@ use crate::cli;
 use crate::utils;
 
 mod bootstrap;
+pub mod connectivity;
 pub mod dist;
 pub mod sketch;
 

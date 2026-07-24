@@ -166,6 +166,12 @@ impl std::fmt::Display for Reliability {
 pub struct DistanceEstimate {
     pub query: String,
     pub reference: String,
+
+    /// Raw scketch name preserved alongside the basename
+    /// to ease rescue mechanism
+    pub query_path: String,
+    pub reference_path: String,
+
     pub jaccard: f64,
     pub jaccard_ci_95_low: f64,
     pub jaccard_ci_95_high: f64,
@@ -318,6 +324,8 @@ fn annotate_with_uncertainty(d: &SketchDistance, kmer_length: u8) -> DistanceEst
     DistanceEstimate {
         query: extract_basename(&d.query),
         reference: extract_basename(&d.reference),
+        query_path: d.query.clone(),
+        reference_path: d.reference.clone(),
         jaccard: d.jaccard,
         jaccard_ci_95_low,
         jaccard_ci_95_high,
@@ -333,6 +341,21 @@ fn annotate_with_uncertainty(d: &SketchDistance, kmer_length: u8) -> DistanceEst
     }
 }
 
+/// Compute pairwise Mash distances annotated with an uncertainty
+/// estimate, with NO rescue attempt. Used by `cedar build`'s
+/// connectivity analysis, which needs every pair evaluated at a single,
+/// uniform k-mer size, rescuing individual pairs to different k values
+/// would break NJ's implicit assumption that every matrix entry is
+/// comparable.
+pub fn compute_base_distances_with_uncertainty(sketches: Vec<Sketch>) -> Vec<DistanceEstimate> {
+    let kmer_length = sketches.first().map(|s| s.sketch_params.k()).unwrap_or(21);
+    compute_distances(sketches)
+        .into_iter()
+        .filter(|d| d.query != d.reference)
+        .map(|d| annotate_with_uncertainty(&d, kmer_length))
+        .collect()
+}
+
 /// Compute pairwise Mash distances annotated with an uncertainty estimate,
 /// attempting a k-mer-size rescue (`attempt_kmer_rescue`) for any pair
 /// that comes back Unreliable or NoSharedHashes at the run's k-mer size.
@@ -345,8 +368,6 @@ pub fn compute_distances_with_uncertainty(
     sketch_size: usize,
     seed: u64,
 ) -> Vec<DistanceEstimate> {
-    let kmer_length = sketches.first().map(|s| s.sketch_params.k()).unwrap_or(21);
-
     // SketchDistance doesn't carry genome sizes forward; keep them by
     // name for the rescue path's significance test and k-floor.
     let sizes: HashMap<String, u64> = sketches
@@ -354,18 +375,16 @@ pub fn compute_distances_with_uncertainty(
         .map(|s| (s.name.clone(), s.seq_length))
         .collect();
 
-    let distances = compute_distances(sketches);
+    let kmer_length = sketches.first().map(|s| s.sketch_params.k()).unwrap_or(21);
+    let base_estimates = compute_base_distances_with_uncertainty(sketches);
 
     let mut needs_larger_sketch = 0usize;
     let mut rescued_count = 0usize;
     let mut still_unresolvable = 0usize;
 
-    let estimates: Vec<DistanceEstimate> = distances
+    let estimates: Vec<DistanceEstimate> = base_estimates
         .into_iter()
-        .filter(|d| d.query != d.reference)
-        .map(|d| {
-            let estimate = annotate_with_uncertainty(&d, kmer_length);
-
+        .map(|estimate| {
             if !matches!(
                 estimate.reliability,
                 Reliability::Unreliable | Reliability::NoSharedHashes
@@ -390,12 +409,12 @@ pub fn compute_distances_with_uncertainty(
                 return estimate;
             }
 
-            let query_size = *sizes.get(&d.query).unwrap_or(&0);
-            let reference_size = *sizes.get(&d.reference).unwrap_or(&0);
+            let query_size = *sizes.get(&estimate.query_path).unwrap_or(&0);
+            let reference_size = *sizes.get(&estimate.reference_path).unwrap_or(&0);
 
             match attempt_kmer_rescue(
-                &d.query,
-                &d.reference,
+                &estimate.query_path,
+                &estimate.reference_path,
                 query_size,
                 reference_size,
                 kmer_length,

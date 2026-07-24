@@ -126,6 +126,12 @@ pub struct BuildArgs {
     #[arg(long, help_heading = "Tree options")]
     pub canonical: bool,
 
+    /// If some genomes can only be connected via divergent (statistically
+    /// unreliable) pairs, search for a smaller dataset-wide k-mer size
+    /// that resolves them, rather than refusing to build the tree.
+    #[arg(long, help_heading = "Tree options")]
+    pub include_div_pairs: bool,
+
     #[command(flatten)]
     pub sketch: SketchArgs,
 }
