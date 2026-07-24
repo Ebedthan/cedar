@@ -34,6 +34,8 @@ pub fn create_sketches(
     seed: u64,
     outdir: &str,
 ) -> FinchResult<Vec<String>> {
+    fs::create_dir_all(outdir)?;
+
     // Create SketchParams struct for finch
     let sketch_params = SketchParams::Mash {
         kmers_to_sketch: sketch_size * 200,
@@ -55,9 +57,15 @@ pub fn create_sketches(
     filenames
         .iter()
         .map(|filename| {
-            let filename: String = filename.display().to_string();
-            let sketches = sketch_files(&[&filename], &sketch_params, &filter_params)?;
-            let out_path = PathBuf::from(outdir).join(format!("{}.msh", filename));
+            let filename_str: String = filename.display().to_string();
+            let sketches = sketch_files(&[&filename_str], &sketch_params, &filter_params)?;
+
+            let basename = filename
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| filename_str.clone());
+
+            let out_path = PathBuf::from(outdir).join(format!("{}.msh", basename));
             let mut out_file = File::create(&out_path)?;
             write_mash_file(&mut out_file, &sketches)?;
             Ok(out_path.to_string_lossy().into_owned())
@@ -104,7 +112,6 @@ mod tests {
 
     #[test]
     fn test_create_sketches() {
-        // Define test parameters
         let filenames = [
             PathBuf::from("test/bacam.fna"),
             PathBuf::from("test/bacsp.fna"),
@@ -115,12 +122,9 @@ mod tests {
         let outdir = "test_output";
         fs::create_dir(outdir).unwrap();
 
-        // Call the function under test
         let result = create_sketches(&filenames, kmer_size, sketch_size, seed, outdir);
-        // Verify that the function returned successfully
         assert!(result.is_ok());
 
-        // Verify that the output directory and sketch files were created
         assert!(fs::metadata(outdir).is_ok());
         for filename in &filenames {
             let output_filename = format!(
@@ -131,6 +135,50 @@ mod tests {
             println!("{output_filename}");
             assert!(fs::metadata(output_filename).is_ok());
         }
+        fs::remove_dir_all(outdir).unwrap();
+    }
+
+    #[test]
+    fn test_create_sketches_creates_missing_outdir() {
+        // The bug this guards against: create_sketches previously assumed
+        // outdir already existed, silently masked by this same test
+        // manually pre-creating it in test_create_sketches above. This one
+        // deliberately does NOT pre-create the directory.
+        let filenames = [PathBuf::from("test/bacam.fna")];
+        let outdir = "test_output_no_precreate";
+        assert!(
+            fs::metadata(outdir).is_err(),
+            "outdir must not exist before the call"
+        );
+
+        let result = create_sketches(&filenames, 21, 1000, 42, outdir);
+        assert!(
+            result.is_ok(),
+            "create_sketches should create its own outdir: {:?}",
+            result.err()
+        );
+        assert!(fs::metadata(outdir).is_ok());
+
+        fs::remove_dir_all(outdir).unwrap();
+    }
+
+    #[test]
+    fn test_create_sketches_output_is_basename_only_not_nested() {
+        // The bug itself: an input path with a directory prefix must not
+        // produce a nested output path under outdir.
+        let filenames = [PathBuf::from("test/bacam.fna")];
+        let outdir = "test_output_basename_check";
+        fs::create_dir(outdir).unwrap();
+
+        let result = create_sketches(&filenames, 21, 1000, 42, outdir).unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], format!("{}/bacam.fna.msh", outdir));
+        assert!(
+            !result[0].contains("test/bacam.fna.msh"),
+            "output path incorrectly nested the input directory: {}",
+            result[0]
+        );
 
         fs::remove_dir_all(outdir).unwrap();
     }

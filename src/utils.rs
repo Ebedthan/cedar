@@ -364,7 +364,7 @@ mod tests {
     fn test_format_genome_size() {
         // Below 1 Kb: no approximation suffix.
         assert_eq!(format_genome_size(500), "500 bp ");
-        // Kb branch: this used to print "(~true Kb)" — a `bool` was being
+        // Kb branch: this used to print "(~true Kb)", a `bool` was being
         // formatted instead of the actual kilobase value.
         assert_eq!(format_genome_size(2_500), "2500 bp (~2.5 Kb)");
         assert_eq!(format_genome_size(3_400_000), "3400000 bp (~3.4 Mb)");

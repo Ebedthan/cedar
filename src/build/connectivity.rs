@@ -348,7 +348,7 @@ mod tests {
         // make the exact same 300/1000 sharing statistically
         // indistinguishable from two random sequences (background
         // Jaccard ~0.31 here), even though nothing about the CI itself
-        // looks bad. connectivity_edges must still flag this divergent —
+        // looks bad. connectivity_edges must still flag this divergent,
         // otherwise a candidate k could "pass" purely via k-mer-space
         // exhaustion rather than real homology.
         let estimate = make_estimate("A", "B", Reliability::Reliable, Some(0.05), 300, 1000);
@@ -387,7 +387,7 @@ mod tests {
         // If a genome's size can't be found in the sketch map (shouldn't
         // happen in practice, but shouldn't panic either), size defaults
         // to 0, which drives P(K)=0, background r=0, and mash_pvalue
-        // returns 0.0 for shared>0 — i.e. "significant" by that fallback,
+        // returns 0.0 for shared>0 i.e. "significant" by that fallback,
         // which is arguably the wrong direction to fail silently in. This
         // test documents the current behavior so a future change to it
         // is deliberate, not accidental.
@@ -395,7 +395,7 @@ mod tests {
         let sketches = vec![make_sketch("A", 5_000_000)]; // "Z" is missing
 
         let edges = connectivity_edges(&[estimate], &sketches, 21);
-        // Documents current behavior rather than asserting it's ideal —
+        // Documents current behavior rather than asserting it's ideal,
         // worth revisiting if a genome ever legitimately goes missing here.
         assert!(!edges[0].is_divergent);
     }

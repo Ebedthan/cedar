@@ -8,7 +8,7 @@ use crate::utils;
 use anyhow::Result;
 
 /// `cedar dist`: compute pairwise Mash distances annotated with an
-/// uncertainty estimate on each one. No tree is built — this is for the
+/// uncertainty estimate on each one. No tree is built, this is for the
 /// "is this pair a solid species-boundary call" moment, not for producing
 /// a phylogeny.
 pub fn compute_pairwise_distances(args: &cli::DistArgs) -> Result<()> {

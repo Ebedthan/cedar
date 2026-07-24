@@ -146,6 +146,7 @@ pub fn compute_distances_with_uncertainty(
     let mut needs_larger_sketch = 0usize;
     let mut rescued_count = 0usize;
     let mut still_unresolvable = 0usize;
+    let mut rescue_errors: Vec<(String, String, String)> = Vec::new();
 
     let estimates: Vec<DistanceEstimate> = base_estimates
         .into_iter()
@@ -190,20 +191,44 @@ pub fn compute_distances_with_uncertainty(
                     rescued_count += 1;
                     rescued
                 }
-                _ => {
+                Ok(None) => {
+                    still_unresolvable += 1;
+                    estimate
+                }
+                Err(e) => {
+                    // A real I/O/sketching failure, not a biological
+                    // "genuinely divergent" result, keep it out of the
+                    // silent bucket.
+                    rescue_errors.push((
+                        estimate.query.clone(),
+                        estimate.reference.clone(),
+                        e.to_string(),
+                    ));
                     still_unresolvable += 1;
                     estimate
                 }
             }
         })
         .collect();
+    if !rescue_errors.is_empty() {
+        eprintln!(
+            "Warning: {} rescue attempt(s) failed due to an I/O or sketching error, not a \
+             biological result, these pairs' 'unresolvable' status may not reflect their \
+             actual divergence:",
+            rescue_errors.len()
+        );
+        for (q, r, err) in &rescue_errors {
+            eprintln!("  - {} vs {}: {}", q, r, err);
+        }
+    }
 
     if needs_larger_sketch > 0 || rescued_count > 0 || still_unresolvable > 0 {
         println!(
             "Rescue summary: {} pair(s) resolvable with a larger sketch size (see relative_uncertainty), \
              {} pair(s) rescued with a smaller k-mer size (see kmer_size_used/rescued), \
-             {} pair(s) remain unresolvable at any k down to the genome-size-appropriate floor.",
-            needs_larger_sketch, rescued_count, still_unresolvable
+             {} pair(s) remain unresolvable at any k down to the genome-size-appropriate floor \
+             ({} of these were I/O/sketching errors, not biological results, see warnings above).",
+             needs_larger_sketch, rescued_count, still_unresolvable, rescue_errors.len()
         );
     }
 
@@ -263,6 +288,8 @@ fn min_sketch_size_for_precision(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use finch::filtering::FilterParams;
+    use finch::sketch_schemes::{KmerCount, SketchParams};
 
     #[test]
     fn test_rescue_kmer_candidates_always_includes_floor() {
@@ -270,5 +297,101 @@ mod tests {
         assert_eq!(rescue_kmer_candidates(15, 14), vec![14]);
         assert_eq!(rescue_kmer_candidates(21, 21), Vec::<u8>::new());
         assert_eq!(rescue_kmer_candidates(14, 15), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn test_min_sketch_size_for_precision() {
+        // Solved size should actually achieve the target when re-checked.
+        let j = 0.10;
+        let target = 0.10;
+        let size = min_sketch_size_for_precision(j, target, 200, 100_000).unwrap();
+        let x = (j * size as f64).round() as u64;
+        let (low, high) = jaccard_ci_95(x, size).unwrap();
+        let achieved = (high - low) / (2.0 * j);
+        assert!(achieved <= target + 1e-6);
+
+        // A tighter target should never need a smaller sketch size.
+        let loose = min_sketch_size_for_precision(0.10, 0.30, 200, 100_000).unwrap();
+        let tight = min_sketch_size_for_precision(0.10, 0.05, 200, 100_000).unwrap();
+        assert!(tight >= loose);
+
+        // Genuinely near-zero J: unresolvable within a sane ceiling.
+        assert!(min_sketch_size_for_precision(0.0005, 0.10, 200, 100_000).is_none());
+    }
+
+    fn make_sketch(
+        name: &str,
+        shared_range: std::ops::Range<u64>,
+        unique_offset: u64,
+        unique_count: u64,
+    ) -> Sketch {
+        let mut hashes: Vec<KmerCount> = shared_range
+            .map(|h| KmerCount {
+                hash: h,
+                kmer: vec![],
+                count: 1,
+                extra_count: 0,
+                label: None,
+            })
+            .collect();
+        hashes.extend((0..unique_count).map(|i| KmerCount {
+            hash: unique_offset + i,
+            kmer: vec![],
+            count: 1,
+            extra_count: 0,
+            label: None,
+        }));
+        hashes.sort_by_key(|k| k.hash);
+        Sketch {
+            name: name.to_string(),
+            seq_length: 5_000_000,
+            num_valid_kmers: hashes.len() as u64,
+            comment: String::new(),
+            hashes,
+            filter_params: FilterParams::default(),
+            sketch_params: SketchParams::Mash {
+                kmers_to_sketch: 1000,
+                final_size: 1000,
+                no_strict: false,
+                kmer_length: 21,
+                hash_seed: 42,
+            },
+        }
+    }
+
+    #[test]
+    fn test_pair_fixable_by_larger_sketch_never_attempts_kmer_rescue() {
+        // J=0.1 at a small sketch size (200): Unreliable, but
+        // min_sketch_size_for_precision confirms a larger sketch alone
+        // would fix it (within the 100,000 ceiling), so the pair should
+        // never reach attempt_kmer_rescue at all -- this pair's fake
+        // sketch names don't correspond to real files, so if the gate
+        // were wrong, this test would fail on file I/O instead of on an
+        // assertion.
+        let p = make_sketch("P", 0..20, 1_000_000, 180);
+        let q = make_sketch("Q", 0..20, 2_000_000, 180);
+
+        let estimates = compute_distances_with_uncertainty(vec![p, q], 200, 42);
+
+        assert_eq!(estimates.len(), 1);
+        assert_eq!(estimates[0].reliability, Reliability::Unreliable);
+        assert!(!estimates[0].rescued);
+    }
+
+    #[test]
+    fn test_genuinely_unresolvable_pair_fails_gracefully_without_panicking() {
+        // J=0.0001: genuinely unresolvable by sketch size alone even at
+        // the ceiling, so this DOES reach attempt_kmer_rescue -- which
+        // will fail immediately since "R"/"S" aren't real files on disk.
+        // This confirms that failure surfaces as an unchanged, still-
+        // Unreliable estimate rather than a panic.
+        let r = make_sketch("R", 0..1, 10_000_000, 9999);
+        let s = make_sketch("S", 0..1, 20_000_000, 9999);
+
+        let estimates = compute_distances_with_uncertainty(vec![r, s], 10000, 42);
+
+        assert_eq!(estimates.len(), 1);
+        assert_eq!(estimates[0].reliability, Reliability::Unreliable);
+        assert!(!estimates[0].rescued);
     }
 }

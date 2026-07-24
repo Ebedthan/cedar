@@ -60,7 +60,7 @@ fn majority_rule(clades: Vec<Clade>, threshold: usize, n_trees: usize) -> Vec<Cl
 
 /// Two clades are compatible (can coexist in the same tree) only if their
 /// leaf sets are nested (one a subset of the other) or disjoint. Clades that
-/// partially overlap cannot both appear in a valid tree — accepting both
+/// partially overlap cannot both appear in a valid tree, accepting both
 /// would require duplicating a leaf under two different branches.
 fn is_compatible(a: &Clade, b: &Clade) -> bool {
     let a_set: HashSet<&String> = a.leaves.iter().collect();
@@ -380,7 +380,7 @@ mod tests {
             length
         );
         // Support is the fraction of the 4 input trees containing this
-        // clade (2/4) — tracked independently of branch length.
+        // clade (2/4), tracked independently of branch length.
         assert_eq!(result[0].support, Some(0.5));
     }
 
