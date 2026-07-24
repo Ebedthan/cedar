@@ -562,4 +562,63 @@ mod tests {
         assert_eq!(small.hashes.len(), 10);
         assert_eq!(big.hashes.len(), 500);
     }
+
+    #[test]
+    fn test_is_compatible() {
+        let ab = Clade::new(vec!["A".to_string(), "B".to_string()], None);
+        let cd = Clade::new(vec!["C".to_string(), "D".to_string()], None);
+        let a = Clade::new(vec!["A".to_string()], None);
+        let ac = Clade::new(vec!["A".to_string(), "C".to_string()], None);
+
+        // Disjoint leaf sets are always compatible.
+        assert!(is_compatible(&ab, &cd));
+        // A nested clade (subset) is compatible with its superset.
+        assert!(is_compatible(&ab, &a));
+        // Identical leaf sets are compatible (trivially nested in each other).
+        assert!(is_compatible(&ab, &ab));
+        // Partial overlap (neither nested nor disjoint) is NOT compatible --
+        // this is exactly the case that used to produce duplicate leaves.
+        assert!(!is_compatible(&ab, &ac));
+    }
+
+    #[test]
+    fn test_filter_compatible_clades_prefers_higher_support() {
+        let clades = vec![
+            Clade::new_with_support(vec!["A".to_string(), "B".to_string()], None, Some(0.9)),
+            // Conflicts with {A,B} (shares only "A") and has lower support --
+            // must be rejected.
+            Clade::new_with_support(vec!["A".to_string(), "C".to_string()], None, Some(0.8)),
+            // Disjoint from {A,B} -- compatible, must be kept.
+            Clade::new_with_support(vec!["C".to_string(), "D".to_string()], None, Some(0.7)),
+        ];
+
+        let result = filter_compatible_clades(clades);
+
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().any(|c| c.leaves == vec!["A", "B"]));
+        assert!(result.iter().any(|c| c.leaves == vec!["C", "D"]));
+        assert!(!result.iter().any(|c| c.leaves == vec!["A", "C"]));
+    }
+
+    #[test]
+    fn test_get_clades_extracts_all_bipartitions() {
+        let tree = Tree::from_newick("((A:0.1,B:0.2):0.5,C:0.3);").expect("valid newick");
+        let clades = get_clades(&tree.root);
+
+        // 3 singleton leaves + 1 internal cherry + the root's own clade.
+        assert_eq!(clades.len(), 5);
+
+        let has = |leaves: &[&str], length: Option<f64>| {
+            clades.iter().any(|c| {
+                c.leaves == leaves.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+                    && c.length == length
+            })
+        };
+
+        assert!(has(&["A"], Some(0.1)));
+        assert!(has(&["B"], Some(0.2)));
+        assert!(has(&["C"], Some(0.3)));
+        assert!(has(&["A", "B"], Some(0.5)));
+        assert!(has(&["A", "B", "C"], None)); // root itself has no branch length here
+    }
 }
