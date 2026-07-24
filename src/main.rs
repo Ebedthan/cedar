@@ -3,10 +3,13 @@
 // This file may not be copied, modified, or distributed except according
 // to those terms.
 
-pub mod build;
 pub mod cli;
 pub mod nwk;
 pub mod utils;
+
+pub mod build;
+pub mod dist;
+pub mod mash;
 
 use clap::Parser;
 

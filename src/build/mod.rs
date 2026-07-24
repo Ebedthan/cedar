@@ -14,7 +14,14 @@ use crate::utils;
 mod bootstrap;
 pub mod connectivity;
 pub mod dist;
-pub mod sketch;
+pub mod matrix;
+use finch::serialization::Sketch;
+
+use crate::build::matrix::TreeAlgorithm;
+use crate::dist::rescue::{compute_distances_with_uncertainty, rescue_kmer_candidates};
+use crate::mash::sketch::{create_and_load_sketches, k_computing};
+use crate::mash::uncertainty::compute_base_distances_with_uncertainty;
+use crate::mash::uncertainty::Reliability;
 
 /// Configuration for phylogenetic analysis
 #[derive(Debug, Clone)]
@@ -36,6 +43,76 @@ impl Default for PhyloConfig {
     }
 }
 
+/// Result of `resolve_connectivity_with_smaller_kmer`'s global k-mer
+/// search for `--include-div-pairs`.
+struct ConnectivityResolution {
+    sketches: Vec<Sketch>,
+    kmer_size: u8,
+    fully_connected: bool,
+    remaining_load_bearing: Vec<(String, String)>,
+}
+
+/// Search for a smaller dataset-wide k-mer size that resolves connectivity
+/// gaps identified by `analyze_connectivity`. Re-sketching the *entire*
+/// dataset at each candidate (not just the load-bearing pairs) because
+/// Mash distance depends directyl on k, so mixing k across a single distance
+/// matrix would break NJ's implicit assumption that every entry is comparable.
+///
+/// The floor is `k_computing` applied to the LARGEST genome in the dataset:
+/// the largest genome is the most permissive one for chance k-mer collisions
+/// so it sets the k below which any apparent fix would just be k-mer-space
+/// exhaustion, not real homology.
+///
+/// Stops at the first (largest) k where every genome connects via
+/// non-divergent pairs alone. If the floor iss reached without achieving that
+/// returns the floor's sketches/estimates as best effort, along with
+/// whichever pairs are still load-bearing at that point.
+fn resolve_connectivity_with_smaller_kmer(
+    indir: &str,
+    sketch_args: &cli::SketchArgs,
+    current_kmer: u8,
+    genome_sizes: &[(String, usize)],
+) -> Result<ConnectivityResolution> {
+    let largest_genome_size = genome_sizes
+        .iter()
+        .map(|(_, size)| *size as u32)
+        .max()
+        .unwrap_or(0);
+
+    let floor = k_computing(largest_genome_size, 0.01);
+
+    let mut candidates = vec![current_kmer];
+    candidates.extend(rescue_kmer_candidates(current_kmer, floor));
+    let last_index = candidates.len() - 1;
+
+    for (i, &k) in candidates.iter().enumerate() {
+        let sketches = create_and_load_sketches(indir, sketch_args.size, sketch_args.seed, k)?;
+        let base_estimates = compute_base_distances_with_uncertainty(sketches.clone());
+        let edges = dist::connectivity_edges(&base_estimates, &sketches, k);
+        let load_bearing = connectivity::analyze_connectivity(&edges);
+
+        if load_bearing.is_empty() {
+            return Ok(ConnectivityResolution {
+                sketches,
+                kmer_size: k,
+                fully_connected: true,
+                remaining_load_bearing: Vec::new(),
+            });
+        }
+
+        if i == last_index {
+            return Ok(ConnectivityResolution {
+                sketches,
+                kmer_size: k,
+                fully_connected: false,
+                remaining_load_bearing: load_bearing,
+            });
+        }
+    }
+
+    unreachable!("candidate list always contains at leat current_kmer")
+}
+
 pub fn build_tree_using_mash_distance(args: &cli::BuildArgs, threads: usize) -> Result<()> {
     let config = PhyloConfig {
         threads,
@@ -54,10 +131,67 @@ pub fn build_tree_using_mash_distance(args: &cli::BuildArgs, threads: usize) -> 
     let kmer_size = utils::determine_kmer_size(&args.sketch, &stats)?;
 
     // Create sketches
-    let sketches = sketch::create_and_load_sketches(&args.indir, &args.sketch, kmer_size)?;
+    let mut sketches =
+        create_and_load_sketches(&args.indir, args.sketch.size, args.sketch.seed, kmer_size)?;
+
+    // Evaluate reliability at this k for every pair
+    // and check whether excluding divergent pairs would still leave
+    // every genome connected via resolvable data alone.
+    let base_estimates = compute_base_distances_with_uncertainty(sketches.clone());
+    let edges = dist::connectivity_edges(&base_estimates, &sketches, kmer_size);
+    let load_bearing = connectivity::analyze_connectivity(&edges);
+
+    if !load_bearing.is_empty() {
+        if args.include_div_pairs {
+            println!(
+                "{} divergent pair(s) are load-bearing for connectivity; \
+                searching for a smaller global k-mer size to resolve them...",
+                load_bearing.len()
+            );
+            let resolution = resolve_connectivity_with_smaller_kmer(
+                &args.indir,
+                &args.sketch,
+                kmer_size,
+                &stats,
+            )?;
+
+            if resolution.fully_connected {
+                println!(
+                    "Resolved: switching the whole dataset to k = {} for full connectivity.",
+                    resolution.kmer_size
+                );
+            } else {
+                println!(
+                    "Could not fully resolve connectivity even at the smallest safe k={}; \
+                                     proceeding with {} pair(s) still load-bearing and divergent.",
+                    resolution.kmer_size,
+                    resolution.remaining_load_bearing.len()
+                );
+                for (q, r) in &resolution.remaining_load_bearing {
+                    println!("  - {} vs {}", q, r);
+                }
+            }
+
+            sketches = resolution.sketches;
+        } else {
+            println!(
+                "Excluding {} divergent pair(s) that are load-bearing for connectivty: ",
+                load_bearing.len()
+            );
+            for (q, r) in &load_bearing {
+                println!("  -  {} vs {}", q, r);
+            }
+            println!(
+                "These pairs are the only thing connecting some genomes to the rest of the \
+                dataset via resolvable data. Excluding them may still produce a valid tree \
+                (NJ can use the remaining edges), but rerun with --include-div-pairs to \
+                attempt resolving them with a smaller k-mer size instead."
+            );
+        }
+    }
 
     // Build tree
-    let tree_algorithm = dist::TreeAlgorithm::from_cli(args.canonical, config.threads);
+    let tree_algorithm = TreeAlgorithm::from_cli(args.canonical, config.threads);
 
     if let Some(bootstrap_reps) = args.bootstrap {
         println!("Bootstrap replicates: {}", bootstrap_reps);
@@ -105,15 +239,16 @@ pub fn compute_pairwise_distances(args: &cli::DistArgs) -> Result<()> {
     let kmer_size = utils::determine_kmer_size(&args.sketch, &stats)?;
 
     // Create sketches
-    let sketches = sketch::create_and_load_sketches(&args.indir, &args.sketch, kmer_size)?;
+    let sketches =
+        create_and_load_sketches(&args.indir, args.sketch.size, args.sketch.seed, kmer_size)?;
 
     // Compute pairwise distances, each with an uncertainty estimate
     let estimates =
-        dist::compute_distances_with_uncertainty(sketches, args.sketch.size, args.sketch.seed);
+        compute_distances_with_uncertainty(sketches, args.sketch.size, args.sketch.seed);
 
     let flagged = estimates
         .iter()
-        .filter(|e| e.reliability != dist::Reliability::Reliable)
+        .filter(|e| e.reliability != Reliability::Reliable)
         .count();
     println!(
         "{} pairwise distances computed ({} flagged as borderline, unreliable, or lacking shared hashes)",

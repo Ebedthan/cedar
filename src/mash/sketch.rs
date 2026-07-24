@@ -7,7 +7,6 @@ use std::fs;
 use std::fs::File;
 use std::path::PathBuf;
 
-use crate::cli;
 use finch::serialization::Sketch;
 use finch::{
     errors::FinchResult, filtering::FilterParams, serialization::write_mash_file, sketch_files,
@@ -68,7 +67,8 @@ pub fn create_sketches(
 
 pub fn create_and_load_sketches(
     indir: &str,
-    sketch_args: &cli::SketchArgs,
+    sketch_size: usize,
+    sketch_seed: u64,
     kmer_size: u8,
 ) -> anyhow::Result<Vec<Sketch>> {
     let mut inputs = Vec::new();
@@ -78,13 +78,8 @@ pub fn create_and_load_sketches(
     }
 
     // Create sketches
-    let sketches_path = create_sketches(
-        &inputs,
-        kmer_size,
-        sketch_args.size,
-        sketch_args.seed,
-        "cedar_result",
-    )?;
+    let sketches_path =
+        create_sketches(&inputs, kmer_size, sketch_size, sketch_seed, "cedar_result")?;
 
     // Load sketches in parallel
     let sketches: Vec<Sketch> = sketches_path

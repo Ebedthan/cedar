@@ -1,5 +1,5 @@
 use crate::{
-    build::dist::{self, ComputeTree, TreeAlgorithm},
+    build::matrix::{distance_to_matrix, ComputeTree, TreeAlgorithm},
     cli,
     nwk::{build_tree_from_clades, Clade, Node, Tree},
     utils,
@@ -8,6 +8,8 @@ use finch::serialization::Sketch;
 use rand::{rng, seq::IndexedRandom};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
+
+use crate::mash::distance::compute_distances;
 
 /// Per-clade bookkeeping across replicate trees: how many trees contained
 /// this clade (bipartition), and the branch lengths observed for it. These
@@ -204,8 +206,8 @@ pub fn build_bootstrap_tree(
         .into_par_iter()
         .map(|_| -> anyhow::Result<Tree> {
             let tmp_sketches = sample_sketches_with_replacement(sketches.clone());
-            let tmp_distance = dist::compute_distances(tmp_sketches);
-            let tmp_matrix = dist::distance_to_matrix(tmp_distance);
+            let tmp_distance = compute_distances(tmp_sketches);
+            let tmp_matrix = distance_to_matrix(tmp_distance);
             let tmp_tree_newick = tmp_matrix.compute_newick_tree(tree_algorithm)?;
             Tree::from_newick(&tmp_tree_newick)
                 .map_err(|e| anyhow::anyhow!("Tree parsing error: {}", e))
@@ -240,8 +242,8 @@ pub fn build_jackknife_tree(
         .into_par_iter()
         .map(|_| -> anyhow::Result<Tree> {
             let tmp_sketches = sample_sketches_without_replacement(sketches.clone(), proportion);
-            let tmp_distance = dist::compute_distances(tmp_sketches);
-            let tmp_matrix = dist::distance_to_matrix(tmp_distance);
+            let tmp_distance = compute_distances(tmp_sketches);
+            let tmp_matrix = distance_to_matrix(tmp_distance);
             let tmp_tree_newick = tmp_matrix.compute_newick_tree(tree_algorithm)?;
             Tree::from_newick(&tmp_tree_newick)
                 .map_err(|e| anyhow::anyhow!("Tree parsing error: {}", e))
@@ -260,8 +262,8 @@ pub fn build_single_tree(
     tree_algorithm: &TreeAlgorithm,
     args: &cli::BuildArgs,
 ) -> anyhow::Result<()> {
-    let sketch_distance = dist::compute_distances(sketches);
-    let matrix = dist::distance_to_matrix(sketch_distance);
+    let sketch_distance = compute_distances(sketches);
+    let matrix = distance_to_matrix(sketch_distance);
     let newick = matrix.compute_newick_tree(tree_algorithm)?;
 
     utils::output_tree(args.output.clone(), newick)?;
@@ -452,18 +454,10 @@ mod tests {
     fn test_jackknife_proportion_validation() {
         // proportion must be strictly between 0 and 1; out-of-range values
         // should fail fast rather than silently keep 0 or all hashes.
-        assert!(
-            build_jackknife_tree(vec![], 5, 1.5, &dist::TreeAlgorithm::Canonical, None).is_err()
-        );
-        assert!(
-            build_jackknife_tree(vec![], 5, 0.0, &dist::TreeAlgorithm::Canonical, None).is_err()
-        );
-        assert!(
-            build_jackknife_tree(vec![], 5, 1.0, &dist::TreeAlgorithm::Canonical, None).is_err()
-        );
-        assert!(
-            build_jackknife_tree(vec![], 5, -0.1, &dist::TreeAlgorithm::Canonical, None).is_err()
-        );
+        assert!(build_jackknife_tree(vec![], 5, 1.5, &TreeAlgorithm::Canonical, None).is_err());
+        assert!(build_jackknife_tree(vec![], 5, 0.0, &TreeAlgorithm::Canonical, None).is_err());
+        assert!(build_jackknife_tree(vec![], 5, 1.0, &TreeAlgorithm::Canonical, None).is_err());
+        assert!(build_jackknife_tree(vec![], 5, -0.1, &TreeAlgorithm::Canonical, None).is_err());
     }
 
     fn make_test_sketch(name: &str, n_hashes: u64) -> Sketch {

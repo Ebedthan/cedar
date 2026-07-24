@@ -3,9 +3,9 @@
 // This file may not be copied, modified, or distributed except according
 // to those terms.
 
-use crate::build::dist;
-use crate::build::sketch;
 use crate::cli;
+use crate::mash::sketch::k_computing;
+use crate::mash::uncertainty::DistanceEstimate;
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 use std::fs::{self, File};
@@ -51,7 +51,7 @@ fn fmt_opt(value: Option<f64>) -> String {
 /// or to stdout if no output path was given.
 pub fn output_distance_table(
     output: Option<String>,
-    estimates: &[dist::DistanceEstimate],
+    estimates: &[DistanceEstimate],
 ) -> anyhow::Result<()> {
     let mut writer: Box<dyn Write> = match output {
         Some(path) => Box::new(fs::File::create(path)?),
@@ -280,7 +280,7 @@ pub fn determine_kmer_size(
     } else {
         let mean_genome_size =
             (stats.iter().map(|x| x.1 as u64).sum::<u64>() / stats.len() as u64) as u32;
-        let kmer_size = sketch::k_computing(mean_genome_size, 0.01);
+        let kmer_size = k_computing(mean_genome_size, 0.01);
         println!(
             "Computed k-mer size (mean genome size: {}, probability: 0.01): {}",
             format_genome_size(mean_genome_size as usize),
