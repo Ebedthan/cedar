@@ -274,12 +274,6 @@ pub fn determine_kmer_size(
     sketch_args: &cli::SketchArgs,
     stats: &[(String, usize)],
 ) -> anyhow::Result<u8> {
-    if sketch_args.target_precision.is_some() {
-        anyhow::bail!(
-            "--target-precision is not implemented yet; use -k/--kmer and -s/--size directly for now"
-        );
-    }
-
     if let Some(km) = sketch_args.kmer {
         println!("User-defined k-mer size: {}", km);
         Ok(km)

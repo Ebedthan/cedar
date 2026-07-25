@@ -255,30 +255,31 @@ fn mash_distance_from_jaccard(jaccard: f64, kmer_length: u8) -> f64 {
     d.clamp(0.0, 1.0)
 }
 
-fn make_sketch_distance(
-    query: &str,
-    reference: &str,
-    jaccard: f64,
-    common_hashes: u64,
-    total_hashes: u64,
-) -> SketchDistance {
-    let mash_distance = (-((2.0 * jaccard) / (1.0 + jaccard)).ln() / 21.0)
-        .max(0.0)
-        .min(1.0);
-    SketchDistance {
-        containment: jaccard, // not used by these tests
-        jaccard,
-        mash_distance,
-        common_hashes,
-        total_hashes,
-        query: query.to_string(),
-        reference: reference.to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_sketch_distance(
+        query: &str,
+        reference: &str,
+        jaccard: f64,
+        common_hashes: u64,
+        total_hashes: u64,
+    ) -> SketchDistance {
+        let mash_distance = (-((2.0 * jaccard) / (1.0 + jaccard)).ln() / 21.0)
+            .max(0.0)
+            .min(1.0);
+        SketchDistance {
+            containment: jaccard, // not used by these tests
+            jaccard,
+            mash_distance,
+            common_hashes,
+            total_hashes,
+            query: query.to_string(),
+            reference: reference.to_string(),
+        }
+    }
+
     #[test]
     fn test_reliability_classification_matches_expected_regimes() {
         // Near-identical strains: tight Jaccard estimate -> reliable, even
@@ -335,11 +336,121 @@ mod tests {
     #[test]
     fn test_mash_significance_matches_paper_example() {
         // Ondov et al. state that s=400, true J=0.1 gives P(30<=x<=50) > 0.9.
-        let p_ge_30 = 1.0 - mash_pvalue(30, 400, 0.1);
-        let p_ge_51 = 1.0 - mash_pvalue(51, 400, 0.1);
         // p_ge_30 - p_ge_51 == P(30<=X<=50) is awkward via our p-value framing
         // (mash_pvalue(x,..) = P(X>=x)), so compute directly instead:
         let p_between = mash_pvalue(30, 400, 0.1) - mash_pvalue(51, 400, 0.1);
         assert!(p_between > 0.9);
+    }
+
+    #[test]
+    fn test_kmer_hit_probability_and_background_jaccard_realistic_genomes() {
+        // 5 Mbp genome at k=21: values already verified against a real
+        // computation several turns back.
+        let p = kmer_hit_probability(5_000_000, 21);
+        assert!((p - 1.137e-6).abs() < 1e-9, "unexpected P(K): {}", p);
+
+        // Two such genomes: background Jaccard should be roughly half of p
+        // (since denom ~= 2p for tiny p).
+        let r = background_jaccard(p, p);
+        assert!(
+            (r - 5.684e-7).abs() < 1e-10,
+            "unexpected background r: {}",
+            r
+        );
+    }
+
+    #[test]
+    fn test_kmer_hit_probability_increases_with_genome_size_and_decreases_with_k() {
+        // Eq. 1's whole point: larger genomes and smaller k both make a
+        // chance k-mer match more likely.
+        assert!(kmer_hit_probability(10_000_000, 21) > kmer_hit_probability(5_000_000, 21));
+        assert!(kmer_hit_probability(5_000_000, 15) > kmer_hit_probability(5_000_000, 21));
+    }
+
+    #[test]
+    fn test_background_jaccard_symmetric_and_bounded() {
+        let r1 = background_jaccard(0.001, 0.002);
+        let r2 = background_jaccard(0.002, 0.001);
+        assert_eq!(
+            r1, r2,
+            "background Jaccard must be symmetric in its two arguments"
+        );
+        assert!((0.0..=1.0).contains(&r1));
+
+        // Degenerate case: both probabilities zero -> denom is zero -> defined as 0, not NaN.
+        assert_eq!(background_jaccard(0.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn test_mash_distance_from_jaccard_matches_finch_formula() {
+        // These exact values were confirmed against a real compiled
+        // finch::distance() call earlier this conversation (A-vs-B and
+        // A-vs-E pairs at k=21).
+        assert!((mash_distance_from_jaccard(0.95, 21) - 0.0012).abs() < 1e-4);
+        assert!((mash_distance_from_jaccard(0.005, 21) - 0.2195).abs() < 1e-4);
+
+        // Identical sketches: distance is exactly 0.
+        assert_eq!(mash_distance_from_jaccard(1.0, 21), 0.0);
+
+        // No shared signal at all: distance is exactly 1 (fully diverged, by
+        // convention), not an unclamped +infinity from ln(0).
+        assert_eq!(mash_distance_from_jaccard(0.0, 21), 1.0);
+        assert_eq!(mash_distance_from_jaccard(-0.5, 21), 1.0); // defensive: shouldn't occur, but must not panic
+    }
+
+    #[test]
+    fn test_reliability_classify_exact_threshold_boundaries() {
+        // Exactly at the boundary is inclusive on the tighter side (<=), not
+        // exclusive -- worth locking in explicitly since the existing
+        // regime tests (J=0.95/0.10/0.005) never land precisely on a cutoff.
+        assert_eq!(
+            Reliability::classify(Some(0.10), 100),
+            Reliability::Reliable
+        );
+        assert_eq!(
+            Reliability::classify(Some(0.100001), 100),
+            Reliability::Borderline
+        );
+        assert_eq!(
+            Reliability::classify(Some(0.30), 100),
+            Reliability::Borderline
+        );
+        assert_eq!(
+            Reliability::classify(Some(0.300001), 100),
+            Reliability::Unreliable
+        );
+
+        // common_hashes == 0 always wins, regardless of relative_uncertainty.
+        assert_eq!(
+            Reliability::classify(Some(0.01), 0),
+            Reliability::NoSharedHashes
+        );
+        assert_eq!(Reliability::classify(None, 0), Reliability::NoSharedHashes);
+    }
+
+    #[test]
+    fn test_reliability_display_and_as_str() {
+        assert_eq!(Reliability::Reliable.as_str(), "reliable");
+        assert_eq!(format!("{}", Reliability::Borderline), "borderline");
+        assert_eq!(format!("{}", Reliability::Unreliable), "unreliable");
+        assert_eq!(
+            format!("{}", Reliability::NoSharedHashes),
+            "no_shared_hashes"
+        );
+    }
+
+    #[test]
+    fn test_mash_pvalue_edge_cases() {
+        // No shared hashes at all: P-value is trivially 1 (can't reject the
+        // null with zero observed signal).
+        assert_eq!(mash_pvalue(0, 1000, 0.1), 1.0);
+
+        // Background rate of exactly 0: any shared hash is maximally
+        // significant.
+        assert_eq!(mash_pvalue(5, 1000, 0.0), 0.0);
+
+        // Background rate of 1 (degenerate): nothing is distinguishable from
+        // chance.
+        assert_eq!(mash_pvalue(5, 1000, 1.0), 1.0);
     }
 }

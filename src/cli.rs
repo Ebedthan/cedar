@@ -46,7 +46,6 @@ pub struct SketchArgs {
         long,
         default_value_t = 1000,
         value_name = "INT",
-        conflicts_with = "target_precision",
         help_heading = "Sketching options"
     )]
     pub size: usize,
@@ -66,21 +65,9 @@ pub struct SketchArgs {
         short = 'k',
         long,
         value_name = "INT",
-        conflicts_with = "target_precision",
         help_heading = "Sketching options"
     )]
     pub kmer: Option<u8>,
-
-    /// Automatically choose sketch size (and k-mer size) so that each
-    /// pairwise Mash distance's relative uncertainty stays under this
-    /// fraction (e.g. 0.1 for ~10%), instead of a fixed sketch size.
-    #[arg(
-        long,
-        value_name = "FLOAT",
-        conflicts_with_all = ["size", "kmer"],
-        help_heading = "Sketching options"
-    )]
-    pub target_precision: Option<f64>,
 }
 
 #[derive(Args, Debug)]
@@ -148,4 +135,80 @@ pub struct DistArgs {
 
     #[command(flatten)]
     pub sketch: SketchArgs,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn test_build_defaults() {
+        let cli = Cli::try_parse_from(["cedar", "build", "genomes/"]).unwrap();
+        match cli.command {
+            Commands::Build(args) => {
+                assert_eq!(args.indir, "genomes/");
+                assert_eq!(args.sketch.size, 1000);
+                assert_eq!(args.sketch.seed, 42);
+                assert!(args.sketch.kmer.is_none());
+                assert!(args.bootstrap.is_none());
+                assert!(args.jacknife.is_none());
+                assert_eq!(args.jacknife_prop, 0.5);
+                assert!(!args.canonical);
+                assert!(!args.include_div_pairs);
+            }
+            _ => panic!("expected Build"),
+        }
+    }
+
+    #[test]
+    fn test_dist_parses_with_output_and_sketch_overrides() {
+        let cli = Cli::try_parse_from([
+            "cedar", "dist", "genomes/", "-o", "out.tsv", "-s", "5000", "-k", "15",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Dist(args) => {
+                assert_eq!(args.indir, "genomes/");
+                assert_eq!(args.output, Some("out.tsv".to_string()));
+                assert_eq!(args.sketch.size, 5000);
+                assert_eq!(args.sketch.kmer, Some(15));
+            }
+            _ => panic!("expected Dist"),
+        }
+    }
+
+    #[test]
+    fn test_bootstrap_and_jackknife_are_mutually_exclusive() {
+        let result = Cli::try_parse_from(["cedar", "build", "genomes/", "-B", "100", "-J", "100"]);
+        assert!(result.is_err(), "expected -B and -J to conflict");
+    }
+
+    #[test]
+    fn test_bootstrap_alone_is_fine() {
+        let cli = Cli::try_parse_from(["cedar", "build", "genomes/", "-B", "500"]).unwrap();
+        match cli.command {
+            Commands::Build(args) => assert_eq!(args.bootstrap, Some(500)),
+            _ => panic!("expected Build"),
+        }
+    }
+
+    #[test]
+    fn test_dist_has_no_tree_or_bootstrap_flags() {
+        // DistArgs should not accept build-only flags at all.
+        let result = Cli::try_parse_from(["cedar", "dist", "genomes/", "-B", "100"]);
+        assert!(
+            result.is_err(),
+            "dist should not accept -B (that's build-only)"
+        );
+    }
+
+    #[test]
+    fn test_missing_subcommand_errors_rather_than_defaulting() {
+        let result = Cli::try_parse_from(["cedar"]);
+        assert!(
+            result.is_err(),
+            "arg_required_else_help should reject no subcommand"
+        );
+    }
 }
