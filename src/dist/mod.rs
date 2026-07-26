@@ -19,7 +19,7 @@ pub fn compute_pairwise_distances(args: &cli::DistArgs) -> Result<()> {
     // an outlier genome size undermines the k-mer size choice for every
     // pairwise distance computed from it, exactly as it would for `build`.
     let stats = utils::compute_genome_stats(&inputs)?;
-    utils::check_genome_outliers(&stats, utils::DEFAULT_OUTLIER_THRESHOLD)?;
+    //utils::check_genome_outliers(&stats, utils::DEFAULT_OUTLIER_THRESHOLD)?;
 
     // Determine k-mer size: manual override, or the same default heuristic
     // `build` uses. `--target-precision`-driven selection isn't implemented

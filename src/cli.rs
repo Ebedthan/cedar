@@ -30,14 +30,11 @@ pub struct Cli {
 pub enum Commands {
     /// Build a Mash-distance neighbor-joining consensus tree
     Build(BuildArgs),
-
     /// Compute pairwise Mash distances with uncertainty estimates (no tree)
     Dist(DistArgs),
 }
 
-/// Sketching options shared between `build` and `dist`: either set sketch
-/// size / k-mer size manually, or let cedar choose them to hit a target
-/// precision on each pairwise distance estimate.
+/// Sketching options shared between `build` and `dist`.
 #[derive(Args, Debug)]
 pub struct SketchArgs {
     /// Sketch size
@@ -70,13 +67,41 @@ pub struct SketchArgs {
     pub kmer: Option<u8>,
 }
 
+/// Statistical parameters shared between `build` and `dist`:
+/// how strict the confidence interval is, and how strict the significance test
+/// is for accepting a k-mer rescue / an "is this pair load-bearing" divergence call.
+#[derive(Args, Debug)]
+pub struct UncertaintyArgs {
+    /// Confidence level for the Jaccard/Mash-distance interval (e.g. 0.99
+    /// for a 99% CI, instead of the default 95%). Tightening this widens
+    /// every interval and will flag more pairs as borderline/unreliable.
+    #[arg(
+        long,
+        default_value_t = 0.95,
+        value_name = "FLOAT",
+        help_heading = "Uncertainty options"
+    )]
+    pub confidence: f64,
+
+    /// P-value threshold for Mash's own significance test, used to
+    /// accept a k-mer rescue and to decide whether a divergent pair is
+    /// distinguishable from chance for connectivity analysis.
+    #[arg(
+        long,
+        default_value_t = 0.01,
+        value_name = "FLOAT",
+        help_heading = "Uncertainty options"
+    )]
+    pub rescue_pvalue: f64,
+}
+
 #[derive(Args, Debug)]
 pub struct BuildArgs {
-    /// Input directory containing FASTA files
-    #[arg(value_name = "DIR")]
-    pub indir: String,
+    /// Input FASTA files and/or directories containing FASTA files
+    #[arg(value_name = "PATH", required = true, num_args = 1..)]
+    pub inputs: Vec<String>,
 
-    /// Output tree (Newick format) to FILE
+    /// Output tree (Newick) to FILE
     #[arg(short, value_name = "FILE")]
     pub output: Option<String>,
 
@@ -115,26 +140,40 @@ pub struct BuildArgs {
 
     /// If some genomes can only be connected via divergent (statistically
     /// unreliable) pairs, search for a smaller dataset-wide k-mer size
-    /// that resolves them, rather than refusing to build the tree.
+    /// that resolves them, rather than proceeding with a tree built partly
+    /// on unreliable data.
     #[arg(long, help_heading = "Tree options")]
     pub include_div_pairs: bool,
 
     #[command(flatten)]
     pub sketch: SketchArgs,
+
+    #[command(flatten)]
+    pub uncertainty: UncertaintyArgs,
 }
 
 #[derive(Args, Debug)]
 pub struct DistArgs {
-    /// Input directory containing FASTA files
-    #[arg(value_name = "DIR")]
-    pub indir: String,
+    /// Input FASTA files and/or directories containing FASTA files
+    #[arg(value_name = "PATH", required = true, num_args = 1..)]
+    pub inputs: Vec<String>,
 
-    /// Output distance table (TSV) to FILE; prints to stdout if omitted
+    /// Output distance table (TSV) to FILE; a summary is always printed to
+    /// stderr regardless of this option
     #[arg(short, value_name = "FILE")]
     pub output: Option<String>,
 
+    /// Disable the k-mer rescue mechanism: report every pair at the run's
+    /// single k-mer size, with no attempt to improve borderline/unreliable
+    /// results. Useful for reproducing a plain, single-k comparison.
+    #[arg(long, help_heading = "Uncertainty options")]
+    pub no_rescue: bool,
+
     #[command(flatten)]
     pub sketch: SketchArgs,
+
+    #[command(flatten)]
+    pub uncertainty: UncertaintyArgs,
 }
 
 #[cfg(test)]
@@ -147,7 +186,7 @@ mod tests {
         let cli = Cli::try_parse_from(["cedar", "build", "genomes/"]).unwrap();
         match cli.command {
             Commands::Build(args) => {
-                assert_eq!(args.indir, "genomes/");
+                assert_eq!(args.inputs, vec!["genomes/"]);
                 assert_eq!(args.sketch.size, 1000);
                 assert_eq!(args.sketch.seed, 42);
                 assert!(args.sketch.kmer.is_none());
@@ -169,7 +208,7 @@ mod tests {
         .unwrap();
         match cli.command {
             Commands::Dist(args) => {
-                assert_eq!(args.indir, "genomes/");
+                assert_eq!(args.inputs, vec!["genomes/"]);
                 assert_eq!(args.output, Some("out.tsv".to_string()));
                 assert_eq!(args.sketch.size, 5000);
                 assert_eq!(args.sketch.kmer, Some(15));
