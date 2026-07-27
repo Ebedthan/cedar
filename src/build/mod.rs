@@ -139,7 +139,26 @@ pub fn build_tree_using_mash_distance(args: &cli::BuildArgs, threads: usize) -> 
 
     // Compute genome statistics in parallel and genome size outliers
     let stats = utils::compute_genome_stats(&inputs)?;
-    utils::check_genome_outliers(&stats, config.outlier_threshold)?;
+
+    if let Some(outliers) = utils::check_genome_outliers(&stats, utils::DEFAULT_OUTLIER_THRESHOLD) {
+        if args.sketch.kmer.is_none() {
+            println!(
+                "Warning: {} genome(s) are size outliers and may have skewed the \
+                 automatically-computed k-mer size: {:?}. Consider setting -k manually, \
+                 or check whether these genomes' pairs needed rescue.",
+                outliers.len(),
+                outliers
+            );
+        } else {
+            println!(
+                "Warning: {} genome(s) are size outliers: {:?}. This has not affected \
+                 k-mer selection (k was set manually), but may still be worth checking \
+                 against pairs flagged borderline/unreliable or rescued.",
+                outliers.len(),
+                outliers
+            );
+        }
+    }
 
     // Determine k-mer size
     let kmer_size = utils::determine_kmer_size(&args.sketch, &stats)?;

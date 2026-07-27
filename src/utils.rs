@@ -14,9 +14,7 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::process;
 use std::sync::Once;
-
 /// Default relative-deviation threshold for flagging a genome-size
 /// outlier, shared between `build` and `dist` (which otherwise has no
 /// reason to depend on `build::PhyloConfig` for a single constant).
@@ -58,15 +56,26 @@ fn fmt_opt(value: Option<f64>) -> String {
 pub fn output_distance_table(
     output: Option<String>,
     estimates: &[DistanceEstimate],
+    confidence: f64,
+    rescue_pvalue: f64,
 ) -> anyhow::Result<()> {
     let mut writer: Box<dyn Write> = match output {
         Some(path) => Box::new(fs::File::create(path)?),
         None => Box::new(io::stdout()),
     };
 
+    // Leading metadata line: makes the file self-describing once separated
+    // from the command that produced it, without repeating these two
+    // constant values on every data row. Standard `#`-prefixed convention.
     writeln!(
         writer,
-        "genome1\tgenome2\tjaccard\tjaccard_ci_95_low\tjaccard_ci_95_high\tmash_distance\tmash_distance_ci_95_low\tmash_distance_ci_95_high\tshared_hashes\ttotal_hashes\trelative_uncertainty\tflag\tkmer_size_used\trescued"
+        "# confidence={} rescue_pvalue={}",
+        confidence, rescue_pvalue
+    )?;
+
+    writeln!(
+        writer,
+        "genome1\tgenome2\tjaccard\tjaccard_ci_low\tjaccard_ci_high\tmash_distance\tmash_distance_ci_low\tmash_distance_ci_high\tshared_hashes\ttotal_hashes\trelative_uncertainty\tflag\tkmer_size_used\trescued"
     )?;
 
     for e in estimates {
@@ -213,7 +222,10 @@ pub fn format_genome_size(size: usize) -> String {
 ///
 /// **Output:** a vec of tuple similar to `data` containing the outliers.
 ///
-pub fn check_genome_outliers(data: &[(String, usize)], epsilon: f64) -> anyhow::Result<()> {
+pub fn check_genome_outliers(
+    data: &[(String, usize)],
+    epsilon: f64,
+) -> Option<Vec<(String, usize)>> {
     let mut outliers = Vec::with_capacity(data.len());
     if data.len() < 4 {
         // Use leave-one-out mean impact method
@@ -255,19 +267,7 @@ pub fn check_genome_outliers(data: &[(String, usize)], epsilon: f64) -> anyhow::
             .collect();
     }
 
-    if !outliers.is_empty() {
-        eprintln!("Error: outliers detected in genome sizes");
-        for outlier in outliers {
-            eprintln!(
-                "Genome {} with size {} will negatively influence k selection",
-                outlier.0,
-                format_genome_size(outlier.1)
-            );
-        }
-        process::exit(1);
-    }
-
-    Ok(())
+    Some(outliers)
 }
 
 pub fn determine_kmer_size(

@@ -29,7 +29,26 @@ pub fn compute_pairwise_distances(args: &cli::DistArgs) -> Result<()> {
     let inputs = utils::validate_and_collect_inputs(&args.inputs)?;
 
     let stats = utils::compute_genome_stats(&inputs)?;
-    utils::check_genome_outliers(&stats, utils::DEFAULT_OUTLIER_THRESHOLD)?;
+
+    if let Some(outliers) = utils::check_genome_outliers(&stats, utils::DEFAULT_OUTLIER_THRESHOLD) {
+        if args.sketch.kmer.is_none() {
+            println!(
+                "Warning: {} genome(s) are size outliers and may have skewed the \
+                 automatically-computed k-mer size: {:?}. Consider setting -k manually, \
+                 or check whether these genomes' pairs needed rescue.",
+                outliers.len(),
+                outliers
+            );
+        } else {
+            println!(
+                "Warning: {} genome(s) are size outliers: {:?}. This has not affected \
+                 k-mer selection (k was set manually), but may still be worth checking \
+                 against pairs flagged borderline/unreliable or rescued.",
+                outliers.len(),
+                outliers
+            );
+        }
+    }
 
     let kmer_size = utils::determine_kmer_size(&args.sketch, &stats)?;
 
@@ -73,7 +92,12 @@ pub fn compute_pairwise_distances(args: &cli::DistArgs) -> Result<()> {
     );
 
     if let Some(output_path) = &args.output {
-        utils::output_distance_table(Some(output_path.clone()), &estimates)?;
+        utils::output_distance_table(
+            Some(output_path.clone()),
+            &estimates,
+            args.uncertainty.confidence,
+            args.uncertainty.rescue_pvalue,
+        )?;
     }
 
     Ok(())
