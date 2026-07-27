@@ -140,32 +140,14 @@ pub fn build_tree_using_mash_distance(args: &cli::BuildArgs, threads: usize) -> 
     // Compute genome statistics in parallel and genome size outliers
     let stats = utils::compute_genome_stats(&inputs)?;
 
-    if let Some(outliers) = utils::check_genome_outliers(&stats, utils::DEFAULT_OUTLIER_THRESHOLD) {
-        if args.sketch.kmer.is_none() {
-            println!(
-                "Warning: {} genome(s) are size outliers and may have skewed the \
-                 automatically-computed k-mer size: {:?}. Consider setting -k manually, \
-                 or check whether these genomes' pairs needed rescue.",
-                outliers.len(),
-                outliers
-            );
-        } else {
-            println!(
-                "Warning: {} genome(s) are size outliers: {:?}. This has not affected \
-                 k-mer selection (k was set manually), but may still be worth checking \
-                 against pairs flagged borderline/unreliable or rescued.",
-                outliers.len(),
-                outliers
-            );
-        }
-    }
+    let _outliers = utils::check_genome_outliers(&stats, utils::DEFAULT_OUTLIER_THRESHOLD);
 
     // Determine k-mer size
-    let kmer_size = utils::determine_kmer_size(&args.sketch, &stats)?;
+    let kmer = utils::determine_kmer_size(&args.sketch, &stats)?;
 
     // Create sketches
     let mut sketches =
-        create_and_load_sketches(&inputs, args.sketch.size, args.sketch.seed, kmer_size)?;
+        create_and_load_sketches(&inputs, args.sketch.size, args.sketch.seed, kmer.kmer_size)?;
 
     // Evaluate reliability at this k for every pair and check whether
     // excluding divergent pairs would still leave every genome connected
@@ -175,7 +157,7 @@ pub fn build_tree_using_mash_distance(args: &cli::BuildArgs, threads: usize) -> 
     let edges = connectivity_edges(
         &base_estimates,
         &sketches,
-        kmer_size,
+        kmer.kmer_size,
         args.uncertainty.rescue_pvalue,
     );
     let load_bearing = connectivity::analyze_connectivity(&edges);
@@ -190,7 +172,7 @@ pub fn build_tree_using_mash_distance(args: &cli::BuildArgs, threads: usize) -> 
             let resolution = resolve_connectivity_with_smaller_kmer(
                 &inputs,
                 &args.sketch,
-                kmer_size,
+                kmer.kmer_size,
                 &stats,
                 args.uncertainty.confidence,
                 args.uncertainty.rescue_pvalue,

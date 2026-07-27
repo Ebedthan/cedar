@@ -20,6 +20,6 @@ fn main() -> Result<()> {
 
     match cli.command {
         cli::Commands::Build(args) => build::build_tree_using_mash_distance(&args, cli.threads),
-        cli::Commands::Dist(args) => dist::compute_pairwise_distances(&args),
+        cli::Commands::Dist(args) => dist::compute_pairwise_distances(&args, cli.verbose),
     }
 }

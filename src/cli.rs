@@ -15,11 +15,11 @@ use clap::{Args, Parser, Subcommand};
 )]
 pub struct Cli {
     /// Number of threads to use
-    #[arg(short, default_value_t = 1, value_name = "INT")]
+    #[arg(short, default_value_t = 1, value_name = "INT", global = true)]
     pub threads: usize,
 
     /// Add verbosity to program
-    #[arg(short = 'v', long, action = clap::ArgAction::SetTrue)]
+    #[arg(short = 'v', long, action = clap::ArgAction::SetTrue, global = true)]
     pub verbose: bool,
 
     #[command(subcommand)]

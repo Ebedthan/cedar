@@ -4,8 +4,10 @@
 // to those terms.
 
 use crate::cli;
+use crate::dist::rescue::RescueSummary;
 use crate::mash::sketch::k_computing;
 use crate::mash::uncertainty::DistanceEstimate;
+use crate::mash::uncertainty::Reliability;
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
@@ -15,6 +17,10 @@ use std::io::BufReader;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Once;
+
+const RULE_WIDTH: usize = 64;
+const LABEL_WIDTH: usize = 24;
+
 /// Default relative-deviation threshold for flagging a genome-size
 /// outlier, shared between `build` and `dist` (which otherwise has no
 /// reason to depend on `build::PhyloConfig` for a single constant).
@@ -185,11 +191,6 @@ pub fn compute_genome_stats(filenames: &[PathBuf]) -> anyhow::Result<Vec<(String
         .map(helper)
         .collect::<anyhow::Result<_>>()?;
 
-    // print stats
-    for stat in &stats {
-        println!("Genome: {}, size: {}", stat.0, format_genome_size(stat.1));
-    }
-
     Ok(stats)
 }
 
@@ -222,10 +223,7 @@ pub fn format_genome_size(size: usize) -> String {
 ///
 /// **Output:** a vec of tuple similar to `data` containing the outliers.
 ///
-pub fn check_genome_outliers(
-    data: &[(String, usize)],
-    epsilon: f64,
-) -> Option<Vec<(String, usize)>> {
+pub fn check_genome_outliers(data: &[(String, usize)], epsilon: f64) -> Vec<(String, usize)> {
     let mut outliers = Vec::with_capacity(data.len());
     if data.len() < 4 {
         // Use leave-one-out mean impact method
@@ -267,26 +265,41 @@ pub fn check_genome_outliers(
             .collect();
     }
 
-    Some(outliers)
+    outliers
+}
+
+/// What `determine_kmer_size` actually decided, kept around so the run
+/// summary can report it (and, if computed, what mean genome size drove it)
+/// without `determine_kmer_size` needing to print anythin itself.
+#[derive(Debug, Clone)]
+pub struct KmerSelection {
+    pub kmer_size: u8,
+    pub user_specified: bool,
+
+    /// Only set when `kmer_size` was computed from the dataset
+    /// (Fofanov's formula) rather than supplied by the user
+    pub mean_genome_size: Option<u32>,
 }
 
 pub fn determine_kmer_size(
     sketch_args: &cli::SketchArgs,
     stats: &[(String, usize)],
-) -> anyhow::Result<u8> {
+) -> anyhow::Result<KmerSelection> {
     if let Some(km) = sketch_args.kmer {
-        println!("User-defined k-mer size: {}", km);
-        Ok(km)
+        Ok(KmerSelection {
+            kmer_size: km,
+            user_specified: true,
+            mean_genome_size: None,
+        })
     } else {
         let mean_genome_size =
             (stats.iter().map(|x| x.1 as u64).sum::<u64>() / stats.len() as u64) as u32;
         let kmer_size = k_computing(mean_genome_size, 0.01);
-        println!(
-            "Computed k-mer size (mean genome size: {}, probability: 0.01): {}",
-            format_genome_size(mean_genome_size as usize),
-            kmer_size
-        );
-        Ok(kmer_size)
+        Ok(KmerSelection {
+            kmer_size,
+            user_specified: false,
+            mean_genome_size: Some(mean_genome_size),
+        })
     }
 }
 
@@ -354,6 +367,170 @@ pub fn validate_and_collect_inputs(inputs: &[String]) -> Result<Vec<PathBuf>> {
     }
 
     Ok(valid_files)
+}
+
+fn compact_size(size: usize) -> String {
+    if size >= 1_000_000_000 {
+        format!("{:.1} Gb", size as f64 / 1_000_000_000.0)
+    } else if size >= 1_000_000 {
+        format!("{:.1} Mb", size as f64 / 1_000_000.0)
+    } else if size >= 1_000 {
+        format!("{:.1} Kb", size as f64 / 1_000.0)
+    } else {
+        format!("{} bp", size)
+    }
+}
+
+fn kv(label: &str, value: impl std::fmt::Display) -> String {
+    format!("  {:<width$}{}", label, value, width = LABEL_WIDTH)
+}
+
+fn continuation(text: &str) -> String {
+    format!("  {:<width$}{}", "", text, width = LABEL_WIDTH)
+}
+
+/// Print the whole run's report as one structured summary to stderr —
+/// fixed-width, aligned columns under clearly separated sections.
+#[allow(clippy::too_many_arguments)]
+pub fn print_run_summary(
+    stats: &[(String, usize)],
+    outliers: &[(String, usize)],
+    kmer: &KmerSelection,
+    sketch_args: &cli::SketchArgs,
+    uncertainty: &cli::UncertaintyArgs,
+    estimates: &[DistanceEstimate],
+    rescue_summary: Option<&RescueSummary>,
+    output_path: &Option<String>,
+    verbose: bool,
+) {
+    let rule = "=".repeat(RULE_WIDTH);
+    let sub_rule = "-".repeat(RULE_WIDTH);
+
+    eprintln!("{}", rule);
+    eprintln!(" cedar dist - run summary");
+    eprintln!("{}", rule);
+
+    eprintln!(" INPUT");
+    let sizes: Vec<usize> = stats.iter().map(|(_, s)| *s).collect();
+    let (min_size, max_size) = (
+        sizes.iter().min().copied().unwrap_or(0),
+        sizes.iter().max().copied().unwrap_or(0),
+    );
+    let mean_size = if stats.is_empty() {
+        0
+    } else {
+        sizes.iter().sum::<usize>() / stats.len()
+    };
+    eprintln!("{}", kv("genomes", stats.len()));
+    eprintln!(
+        "{}",
+        kv(
+            "size range",
+            format!(
+                "{}-{} (mean {})",
+                compact_size(min_size),
+                compact_size(max_size),
+                compact_size(mean_size)
+            )
+        )
+    );
+
+    if verbose {
+        for (id, size) in stats {
+            eprintln!("{}", kv(&format!("  {}", id), compact_size(*size)));
+        }
+    }
+
+    for (id, size) in outliers {
+        eprintln!(
+            "{}",
+            kv("outlier", format!("{} ({})", id, compact_size(*size)))
+        );
+        if kmer.user_specified {
+            eprintln!(
+                "{}",
+                continuation("=> k set manually; check its pairs below")
+            );
+        } else {
+            eprintln!(
+                "{}",
+                continuation("=> may have skewed auto k; consider -k, or check its pairs below")
+            );
+        }
+    }
+
+    eprintln!("{}", sub_rule);
+
+    eprintln!(" PARAMETERS");
+    let k_note = if kmer.user_specified {
+        "user-specified".to_string()
+    } else {
+        format!(
+            "auto, p=0.01, mean {}",
+            compact_size(kmer.mean_genome_size.unwrap_or(0) as usize)
+        )
+    };
+    eprintln!(
+        "{}",
+        kv("k-mer size", format!("{} ({})", kmer.kmer_size, k_note))
+    );
+    eprintln!("{}", kv("sketch size", sketch_args.size));
+    eprintln!("{}", kv("seed", sketch_args.seed));
+    eprintln!(
+        "{}",
+        kv(
+            "confidence",
+            format!("{:.0}%", uncertainty.confidence * 100.0)
+        )
+    );
+    eprintln!("{}", kv("rescue p-value", uncertainty.rescue_pvalue));
+
+    eprintln!("{}", sub_rule);
+
+    eprintln!(" DISTANCES");
+    let reliable = estimates
+        .iter()
+        .filter(|e| e.reliability == Reliability::Reliable)
+        .count();
+    let borderline = estimates
+        .iter()
+        .filter(|e| e.reliability == Reliability::Borderline)
+        .count();
+    let unreliable = estimates
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.reliability,
+                Reliability::Unreliable | Reliability::NoSharedHashes
+            )
+        })
+        .count();
+    eprintln!("{}", kv("pairs computed", estimates.len()));
+    eprintln!("{}", kv("reliable", reliable));
+    eprintln!("{}", kv("borderline", borderline));
+    eprintln!("{}", kv("unreliable", unreliable));
+
+    eprintln!("{}", sub_rule);
+
+    eprintln!(" RESCUE");
+    match rescue_summary {
+        Some(r) => {
+            eprintln!("{}", kv("fixable (sketch)", r.needs_larger_sketch));
+            eprintln!("{}", kv("unreliable => better", r.unreliable_rescued));
+            eprintln!("{}", kv("borderline => reliable", r.borderline_rescued));
+            eprintln!("{}", kv("still unresolved", r.still_unresolvable));
+        }
+        None => eprintln!("{}", kv("status", "disabled (--no-rescue)")),
+    }
+
+    eprintln!("{}", sub_rule);
+
+    eprintln!(" OUTPUT");
+    match output_path {
+        Some(path) => eprintln!("{}", kv("TSV", path)),
+        None => eprintln!("{}", kv("TSV", "not written (pass -o/--output)")),
+    }
+    eprintln!("{}", rule);
 }
 
 #[cfg(test)]
