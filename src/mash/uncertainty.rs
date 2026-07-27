@@ -1,7 +1,10 @@
 use crate::mash::distance::compute_distances;
 use crate::mash::distance::extract_basename;
+
 use finch::serialization::{Sketch, SketchDistance};
 use statrs::distribution::{Beta, ContinuousCDF};
+
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 /// How much a pairwise distance estimate can be trusted ?
 /// Based on the relative half-width of the confidence interval on
@@ -195,7 +198,7 @@ pub fn compute_base_distances_with_uncertainty(
 ) -> Vec<DistanceEstimate> {
     let kmer_length = sketches.first().map(|s| s.sketch_params.k()).unwrap_or(21);
     compute_distances(sketches)
-        .into_iter()
+        .into_par_iter()
         .filter(|d| d.query != d.reference)
         .map(|d| annotate_with_uncertainty(&d, kmer_length, confidence))
         .collect()

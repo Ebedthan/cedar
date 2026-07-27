@@ -1,8 +1,3 @@
-// Copyright 2024-2025 Anicet Ebou.
-// Licensed under the MIT license (http://opensource.org/licenses/MIT)
-// This file may not be copied, modified, or distributed except according
-// to those terms.
-
 use anyhow::Result;
 use std::path::PathBuf;
 
@@ -12,6 +7,7 @@ use crate::utils;
 mod bootstrap;
 pub mod connectivity;
 pub mod matrix;
+
 use finch::serialization::Sketch;
 
 use crate::build::connectivity::connectivity_edges;

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::mash::uncertainty::{mash_significance, DistanceEstimate, Reliability};
 use finch::serialization::Sketch;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 /// One pairwise comparison, as far as connectivity analysis needs to know
 /// about it. Decoupled from `DistanceEstimate`/`Reliability` so this
@@ -89,7 +90,7 @@ pub(crate) fn connectivity_edges(
         .collect();
 
     estimates
-        .iter()
+        .par_iter()
         .map(|e| {
             let ci_divergent = matches!(
                 e.reliability,

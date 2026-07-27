@@ -2,6 +2,7 @@ use finch::distance::distance;
 use finch::serialization::Sketch;
 use finch::serialization::SketchDistance;
 use itertools::Itertools;
+
 use std::path::Path;
 
 /// Cached basename extraction

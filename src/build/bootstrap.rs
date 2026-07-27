@@ -1,15 +1,16 @@
+use crate::mash::distance::compute_distances;
 use crate::{
     build::matrix::{distance_to_matrix, ComputeTree, TreeAlgorithm},
     cli,
     nwk::{build_tree_from_clades, Clade, Node, Tree},
     utils,
 };
+
 use finch::serialization::Sketch;
 use rand::{rng, seq::IndexedRandom};
 use rayon::prelude::*;
-use std::collections::{HashMap, HashSet};
 
-use crate::mash::distance::compute_distances;
+use std::collections::{HashMap, HashSet};
 
 /// Per-clade bookkeeping across replicate trees: how many trees contained
 /// this clade (bipartition), and the branch lengths observed for it. These

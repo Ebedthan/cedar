@@ -1,16 +1,13 @@
-// Copyright 2024-2025 Anicet Ebou.
-// Licensed under the MIT license (http://opensource.org/licenses/MIT)
-// This file may not be copied, modified, or distributed except according
-// to those terms.
-
 use crate::cli;
 use crate::dist::rescue::RescueSummary;
 use crate::mash::sketch::k_computing;
 use crate::mash::uncertainty::DistanceEstimate;
 use crate::mash::uncertainty::Reliability;
+
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
+
 use std::fs::{self, File};
 use std::io::BufRead;
 use std::io::BufReader;

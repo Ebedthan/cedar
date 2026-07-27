@@ -1,8 +1,3 @@
-// Copyright 2024-2025 Anicet Ebou.
-// Licensed under the MIT license (http://opensource.org/licenses/MIT)
-// This file may not be copied, modified, or distributed except according
-// to those terms.
-
 use std::fs;
 use std::fs::File;
 use std::path::PathBuf;
@@ -55,7 +50,7 @@ pub fn create_sketches(
 
     // Process files and generate sketches
     filenames
-        .iter()
+        .par_iter()
         .map(|filename| {
             let filename_str: String = filename.display().to_string();
             let sketches = sketch_files(&[&filename_str], &sketch_params, &filter_params)?;

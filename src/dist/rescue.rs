@@ -3,8 +3,11 @@ use crate::mash::uncertainty::{
     annotate_with_uncertainty, compute_base_distances_with_uncertainty, jaccard_ci,
     mash_significance, DistanceEstimate, Reliability,
 };
+
 use finch::distance::distance;
 use finch::serialization::Sketch;
+use rayon::prelude::*;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -218,67 +221,41 @@ pub fn compute_distances_with_uncertainty(
         return (base_estimates, RescueSummary::default());
     }
 
-    let mut needs_larger_sketch = 0usize;
-    let mut unreliable_rescued = 0usize;
-    let mut borderline_rescued = 0usize;
-    let mut still_unresolvable = 0usize;
-
-    let estimates: Vec<DistanceEstimate> = base_estimates
-        .into_iter()
+    // Each pair's rescue attempt is independent (its own tempdir, its own
+    // 2-genome resketch), so this is safe to parallelize — the counters
+    // are aggregated afterward instead of mutated during the map, which
+    // is what makes that safe (see PairOutcome's doc comment).
+    let results: Vec<(DistanceEstimate, PairOutcome)> = base_estimates
+        .into_par_iter()
         .map(|estimate| {
-            let target = match estimate.reliability {
-                Reliability::Reliable => return estimate,
-                Reliability::Borderline => Reliability::RELIABLE_THRESHOLD,
-                Reliability::Unreliable | Reliability::NoSharedHashes => {
-                    Reliability::BORDERLINE_THRESHOLD
-                }
-            };
-            let started_borderline = matches!(estimate.reliability, Reliability::Borderline);
-
-            let fixable_by_sketch_size = min_sketch_size_for_precision(
-                estimate.jaccard,
-                target,
-                sketch_size as u64,
-                RESCUE_SKETCH_SIZE_CEILING,
-                confidence,
-            )
-            .is_some();
-
-            if fixable_by_sketch_size {
-                needs_larger_sketch += 1;
-                return estimate;
-            }
-
-            let query_size = *sizes.get(&estimate.query_path).unwrap_or(&0);
-            let reference_size = *sizes.get(&estimate.reference_path).unwrap_or(&0);
-
-            match attempt_kmer_rescue(
-                &estimate.query_path,
-                &estimate.reference_path,
-                query_size,
-                reference_size,
+            resolve_pair(
+                estimate,
+                &sizes,
                 kmer_length,
                 sketch_size,
                 seed,
                 confidence,
                 rescue_pvalue,
-                target,
-            ) {
-                Ok(Some(rescued)) => {
-                    if started_borderline {
-                        borderline_rescued += 1;
-                    } else {
-                        unreliable_rescued += 1;
-                    }
-                    rescued
-                }
-                _ => {
-                    still_unresolvable += 1;
-                    estimate
-                }
-            }
+            )
         })
         .collect();
+
+    let mut needs_larger_sketch = 0usize;
+    let mut unreliable_rescued = 0usize;
+    let mut borderline_rescued = 0usize;
+    let mut still_unresolvable = 0usize;
+    let mut estimates = Vec::with_capacity(results.len());
+
+    for (estimate, outcome) in results {
+        match outcome {
+            PairOutcome::NoActionNeeded => {}
+            PairOutcome::NeedsLargerSketch => needs_larger_sketch += 1,
+            PairOutcome::RescuedFromUnreliable => unreliable_rescued += 1,
+            PairOutcome::RescuedFromBorderline => borderline_rescued += 1,
+            PairOutcome::StillUnresolved => still_unresolvable += 1,
+        }
+        estimates.push(estimate);
+    }
 
     (
         estimates,
@@ -289,6 +266,76 @@ pub fn compute_distances_with_uncertainty(
             still_unresolvable,
         },
     )
+}
+
+/// Tag describing what happened to a single pair, used to defer count
+/// aggregation until after the (now-parallel) per-pair work is done.
+/// rayon's parallel `map` requires a pure `Fn`, so the counters the
+/// sequential version mutated via closure capture can't be touched
+/// directly from inside a parallel closure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PairOutcome {
+    NoActionNeeded,
+    NeedsLargerSketch,
+    RescuedFromUnreliable,
+    RescuedFromBorderline,
+    StillUnresolved,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_pair(
+    estimate: DistanceEstimate,
+    sizes: &HashMap<String, u64>,
+    kmer_length: u8,
+    sketch_size: usize,
+    seed: u64,
+    confidence: f64,
+    rescue_pvalue: f64,
+) -> (DistanceEstimate, PairOutcome) {
+    let target = match estimate.reliability {
+        Reliability::Reliable => return (estimate, PairOutcome::NoActionNeeded),
+        Reliability::Borderline => Reliability::RELIABLE_THRESHOLD,
+        Reliability::Unreliable | Reliability::NoSharedHashes => Reliability::BORDERLINE_THRESHOLD,
+    };
+    let started_borderline = matches!(estimate.reliability, Reliability::Borderline);
+
+    let fixable_by_sketch_size = min_sketch_size_for_precision(
+        estimate.jaccard,
+        target,
+        sketch_size as u64,
+        RESCUE_SKETCH_SIZE_CEILING,
+        confidence,
+    )
+    .is_some();
+
+    if fixable_by_sketch_size {
+        return (estimate, PairOutcome::NeedsLargerSketch);
+    }
+
+    let query_size = *sizes.get(&estimate.query_path).unwrap_or(&0);
+    let reference_size = *sizes.get(&estimate.reference_path).unwrap_or(&0);
+
+    match attempt_kmer_rescue(
+        &estimate.query_path,
+        &estimate.reference_path,
+        query_size,
+        reference_size,
+        kmer_length,
+        sketch_size,
+        seed,
+        confidence,
+        rescue_pvalue,
+        target,
+    ) {
+        Ok(Some(rescued)) => {
+            if started_borderline {
+                (rescued, PairOutcome::RescuedFromBorderline)
+            } else {
+                (rescued, PairOutcome::RescuedFromUnreliable)
+            }
+        }
+        _ => (estimate, PairOutcome::StillUnresolved),
+    }
 }
 
 #[cfg(test)]
