@@ -4,6 +4,7 @@
 // to those terms.
 
 use anyhow::Result;
+use std::path::PathBuf;
 
 use crate::cli;
 use crate::utils;
@@ -34,7 +35,7 @@ impl Default for PhyloConfig {
             threads: 1,
             bootstrap_reps: 1000,
             outlier_threshold: utils::DEFAULT_OUTLIER_THRESHOLD,
-            buffer_size: 8192, // 8KB
+            buffer_size: 8192,
         }
     }
 }
@@ -49,25 +50,29 @@ struct ConnectivityResolution {
 }
 
 /// Search for a smaller dataset-wide k-mer size that resolves connectivity
-/// gaps identified by `analyze_connectivity`. Re-sketching the *entire*
+/// gaps identified by `analyze_connectivity`. Re-sketches the *entire*
 /// dataset at each candidate (not just the load-bearing pairs) because
-/// Mash distance depends directyl on k, so mixing k across a single distance
-/// matrix would break NJ's implicit assumption that every entry is comparable.
+/// Mash distance depends directly on k, so mixing k across a single
+/// distance matrix would break NJ's implicit assumption that every entry
+/// is comparable.
 ///
-/// The floor is `k_computing` applied to the LARGEST genome in the dataset:
-/// the largest genome is the most permissive one for chance k-mer collisions
-/// so it sets the k below which any apparent fix would just be k-mer-space
-/// exhaustion, not real homology.
+/// The floor is `k_computing` applied to the LARGEST genome in the
+/// dataset: the largest genome is the most permissive one for chance
+/// k-mer collisions, so it sets the k below which any apparent fix would
+/// just be k-mer-space exhaustion, not real homology.
 ///
 /// Stops at the first (largest) k where every genome connects via
-/// non-divergent pairs alone. If the floor iss reached without achieving that
-/// returns the floor's sketches/estimates as best effort, along with
-/// whichever pairs are still load-bearing at that point.
+/// non-divergent pairs alone. If the floor is reached without achieving
+/// that, returns the floor's sketches/estimates as best effort, along
+/// with whichever pairs are still load-bearing at that point.
+#[allow(clippy::too_many_arguments)]
 fn resolve_connectivity_with_smaller_kmer(
-    indir: &str,
+    inputs: &[PathBuf],
     sketch_args: &cli::SketchArgs,
     current_kmer: u8,
     genome_sizes: &[(String, usize)],
+    confidence: f64,
+    rescue_pvalue: f64,
 ) -> Result<ConnectivityResolution> {
     let largest_genome_size = genome_sizes
         .iter()
@@ -82,9 +87,9 @@ fn resolve_connectivity_with_smaller_kmer(
     let last_index = candidates.len() - 1;
 
     for (i, &k) in candidates.iter().enumerate() {
-        let sketches = create_and_load_sketches(indir, sketch_args.size, sketch_args.seed, k)?;
-        let base_estimates = compute_base_distances_with_uncertainty(sketches.clone());
-        let edges = connectivity_edges(&base_estimates, &sketches, k);
+        let sketches = create_and_load_sketches(inputs, sketch_args.size, sketch_args.seed, k)?;
+        let base_estimates = compute_base_distances_with_uncertainty(sketches.clone(), confidence);
+        let edges = connectivity_edges(&base_estimates, &sketches, k, rescue_pvalue);
         let load_bearing = connectivity::analyze_connectivity(&edges);
 
         if load_bearing.is_empty() {
@@ -106,18 +111,31 @@ fn resolve_connectivity_with_smaller_kmer(
         }
     }
 
-    unreachable!("candidate list always contains at leat current_kmer")
+    unreachable!("candidate list always contains at least current_kmer")
 }
 
 pub fn build_tree_using_mash_distance(args: &cli::BuildArgs, threads: usize) -> Result<()> {
+    if !(args.uncertainty.confidence > 0.5 && args.uncertainty.confidence < 1.0) {
+        anyhow::bail!(
+            "--confidence must be strictly between 0.5 and 1.0, got {}",
+            args.uncertainty.confidence
+        );
+    }
+    if !(args.uncertainty.rescue_pvalue > 0.0 && args.uncertainty.rescue_pvalue < 1.0) {
+        anyhow::bail!(
+            "--rescue-pvalue must be strictly between 0.0 and 1.0, got {}",
+            args.uncertainty.rescue_pvalue
+        );
+    }
+
     let config = PhyloConfig {
         threads,
         bootstrap_reps: args.bootstrap.unwrap_or(1000),
         ..Default::default()
     };
 
-    // Validate and collect input files
-    let inputs = utils::validate_and_collect_inputs(&args.indir)?;
+    // Validate and collect input files (files and/or directories)
+    let inputs = utils::validate_and_collect_inputs(&args.inputs)?;
 
     // Compute genome statistics in parallel and genome size outliers
     let stats = utils::compute_genome_stats(&inputs)?;
@@ -128,27 +146,35 @@ pub fn build_tree_using_mash_distance(args: &cli::BuildArgs, threads: usize) -> 
 
     // Create sketches
     let mut sketches =
-        create_and_load_sketches(&args.indir, args.sketch.size, args.sketch.seed, kmer_size)?;
+        create_and_load_sketches(&inputs, args.sketch.size, args.sketch.seed, kmer_size)?;
 
-    // Evaluate reliability at this k for every pair
-    // and check whether excluding divergent pairs would still leave
-    // every genome connected via resolvable data alone.
-    let base_estimates = compute_base_distances_with_uncertainty(sketches.clone());
-    let edges = connectivity_edges(&base_estimates, &sketches, kmer_size);
+    // Evaluate reliability at this k for every pair and check whether
+    // excluding divergent pairs would still leave every genome connected
+    // via resolvable data alone.
+    let base_estimates =
+        compute_base_distances_with_uncertainty(sketches.clone(), args.uncertainty.confidence);
+    let edges = connectivity_edges(
+        &base_estimates,
+        &sketches,
+        kmer_size,
+        args.uncertainty.rescue_pvalue,
+    );
     let load_bearing = connectivity::analyze_connectivity(&edges);
 
     if !load_bearing.is_empty() {
         if args.include_div_pairs {
             println!(
                 "{} divergent pair(s) are load-bearing for connectivity; \
-                searching for a smaller global k-mer size to resolve them...",
+                 searching for a smaller global k-mer size to resolve them...",
                 load_bearing.len()
             );
             let resolution = resolve_connectivity_with_smaller_kmer(
-                &args.indir,
+                &inputs,
                 &args.sketch,
                 kmer_size,
                 &stats,
+                args.uncertainty.confidence,
+                args.uncertainty.rescue_pvalue,
             )?;
 
             if resolution.fully_connected {
@@ -159,7 +185,7 @@ pub fn build_tree_using_mash_distance(args: &cli::BuildArgs, threads: usize) -> 
             } else {
                 println!(
                     "Could not fully resolve connectivity even at the smallest safe k={}; \
-                                     proceeding with {} pair(s) still load-bearing and divergent.",
+                     proceeding with {} pair(s) still load-bearing and divergent.",
                     resolution.kmer_size,
                     resolution.remaining_load_bearing.len()
                 );
@@ -172,8 +198,8 @@ pub fn build_tree_using_mash_distance(args: &cli::BuildArgs, threads: usize) -> 
         } else {
             println!(
                 "Warning: {} divergent pair(s) are load-bearing for connectivity and will \
-                still be used in the tree (NJ requires a complete distance matrix, so these \
-                pairs can't simply be dropped). Treat branches resting on them with caution:",
+                 still be used in the tree (NJ requires a complete distance matrix, so these \
+                 pairs can't simply be dropped). Treat branches resting on them with caution:",
                 load_bearing.len()
             );
             for (q, r) in &load_bearing {
@@ -181,7 +207,7 @@ pub fn build_tree_using_mash_distance(args: &cli::BuildArgs, threads: usize) -> 
             }
             println!(
                 "Rerun with --include-div-pairs to attempt resolving them with a smaller \
-                             k-mer size instead."
+                 k-mer size instead."
             );
         }
     }
@@ -298,8 +324,8 @@ mod tests {
             make_sketch("E", 0..5, 9_000_000, 995, 5_000_000),
         ];
 
-        let base_estimates = compute_base_distances_with_uncertainty(sketches.clone());
-        let edges = connectivity_edges(&base_estimates, &sketches, 21);
+        let base_estimates = compute_base_distances_with_uncertainty(sketches.clone(), 0.95);
+        let edges = connectivity_edges(&base_estimates, &sketches, 21, 0.01);
         let load_bearing = connectivity::analyze_connectivity(&edges);
 
         assert_eq!(
@@ -325,8 +351,8 @@ mod tests {
             make_sketch("D", 0..950, 4_000_000, 50, 5_000_000),
         ];
 
-        let base_estimates = compute_base_distances_with_uncertainty(sketches.clone());
-        let edges = connectivity_edges(&base_estimates, &sketches, 21);
+        let base_estimates = compute_base_distances_with_uncertainty(sketches.clone(), 0.95);
+        let edges = connectivity_edges(&base_estimates, &sketches, 21, 0.01);
         let load_bearing = connectivity::analyze_connectivity(&edges);
 
         assert!(load_bearing.is_empty());
