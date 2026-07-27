@@ -74,20 +74,14 @@ pub fn create_sketches(
 }
 
 pub fn create_and_load_sketches(
-    indir: &str,
+    inputs: &[PathBuf],
     sketch_size: usize,
     sketch_seed: u64,
     kmer_size: u8,
 ) -> anyhow::Result<Vec<Sketch>> {
-    let mut inputs = Vec::new();
-
-    for file in fs::read_dir(indir)? {
-        inputs.push(file?.path());
-    }
-
     // Create sketches
     let sketches_path =
-        create_sketches(&inputs, kmer_size, sketch_size, sketch_seed, "cedar_result")?;
+        create_sketches(inputs, kmer_size, sketch_size, sketch_seed, "cedar_result")?;
 
     // Load sketches in parallel
     let sketches: Vec<Sketch> = sketches_path

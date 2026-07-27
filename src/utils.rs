@@ -76,11 +76,11 @@ pub fn output_distance_table(
             e.query,
             e.reference,
             e.jaccard,
-            e.jaccard_ci_95_low,
-            e.jaccard_ci_95_high,
+            e.jaccard_ci_low,
+            e.jaccard_ci_high,
             e.mash_distance,
-            e.mash_distance_ci_95_low,
-            e.mash_distance_ci_95_high,
+            e.mash_distance_ci_low,
+            e.mash_distance_ci_high,
             e.shared_hashes,
             e.total_hashes,
             fmt_opt(e.relative_uncertainty),
@@ -291,15 +291,32 @@ pub fn determine_kmer_size(
 }
 
 // Validate input files and collect them efficiently
-pub fn validate_and_collect_inputs(indir: &str) -> Result<Vec<PathBuf>> {
-    let entries: Vec<_> = fs::read_dir(indir)
-        .with_context(|| format!("Failed to read directory: {}", indir))?
-        .collect::<Result<Vec<_>, _>>()?;
+//
+// Accepts a mix of file paths and directory paths: directories ate
+// recursively expanded to their contents, files are used directly.
+// This is the single canonical file list computation and sketching
+// consumes to avoid disagreement with the sketching process.
+pub fn validate_and_collect_inputs(inputs: &[String]) -> Result<Vec<PathBuf>> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
 
-    let (valid_files, validation_results): (Vec<_>, Vec<_>) = entries
+    for input in inputs {
+        let path = PathBuf::from(input);
+        let metadata =
+            fs::metadata(&path).with_context(|| format!("Failed to read path: {}", input))?;
+
+        if metadata.is_dir() {
+            let entries: Vec<_> = fs::read_dir(&path)
+                .with_context(|| format!("Failed to read directory: {}", input))?
+                .collect::<Result<Vec<_>, _>>()?;
+            candidates.extend(entries.into_iter().map(|e| e.path()));
+        } else {
+            candidates.push(path);
+        }
+    }
+
+    let (valid_files, validation_results): (Vec<_>, Vec<_>) = candidates
         .into_par_iter()
-        .map(|entry| {
-            let path = entry.path();
+        .map(|path| {
             let is_valid = is_fasta_format(&path);
             let is_multi = if is_valid {
                 is_multi_fasta(&path)
@@ -310,7 +327,6 @@ pub fn validate_and_collect_inputs(indir: &str) -> Result<Vec<PathBuf>> {
         })
         .unzip();
 
-    // Check for validation errors
     let invalid_files: Vec<_> = valid_files
         .iter()
         .zip(validation_results.iter())

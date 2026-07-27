@@ -1,6 +1,6 @@
 use crate::mash::sketch::{create_sketches, k_computing};
 use crate::mash::uncertainty::{
-    annotate_with_uncertainty, compute_base_distances_with_uncertainty, jaccard_ci_95,
+    annotate_with_uncertainty, compute_base_distances_with_uncertainty, jaccard_ci,
     mash_significance, DistanceEstimate, Reliability,
 };
 use finch::distance::distance;
@@ -8,17 +8,31 @@ use finch::serialization::Sketch;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// Ceiling used only for the "would more sketching alone fix this"
-/// gate below
+/// Ceiling used only for the "would more sketching alone fix this" gate.
 const RESCUE_SKETCH_SIZE_CEILING: u64 = 100_000;
 
-/// k-mer size step for the rescue descent.
-/// Not yet exposed via CLI.
+/// k-mer size step for the rescue descent. Not yet exposed via CLI.
 const RESCUE_KMER_STEP: u8 = 2;
 
-/// Mash's own significance threshold (Eq. 8)
-/// Reused here as the acceptance bar for a rescue
-pub(crate) const RESCUE_PVALUE_THRESHOLD: f64 = 0.01;
+/// Target probability for Fofanov's chance-collision formula,
+/// used only to compute the rescue floor.
+/// This is NOT the same thing as `--rescue-pvalue`: this one bounds
+/// the chance of *any* random k-mer match given a genome size
+/// (a k-selection question); `rescue_pvalue` bounds the chance of observing
+/// *this many* shared hashes given a background rate (Mash's significance test).
+/// They happen to share a conventional default of 0.01, but they are different
+/// statistical objects and are not coupled to the same user-facing flag.
+const FOFANOV_TARGET_PROBABILITY: f64 = 0.01;
+
+/// Summary counts from a `compute_distances_with_uncertainty` run, used to
+/// print the always-on stderr summary at the CLI boundary.
+#[derive(Debug, Clone, Default)]
+pub struct RescueSummary {
+    pub needs_larger_sketch: usize,
+    pub unreliable_rescued: usize,
+    pub borderline_rescued: usize,
+    pub still_unresolvable: usize,
+}
 
 /// Build the descending list of candidate k-mer sizes to try during a
 /// rescue, from `current_kmer` down to and including `floor`. Always
@@ -39,28 +53,25 @@ pub(crate) fn rescue_kmer_candidates(current_kmer: u8, floor: u8) -> Vec<u8> {
 }
 
 /// Attempt to rescue a pair whose reliability at the run's k-mer size is
-/// Unreliable or NoSharedHashes, by trying progressively smaller k-mer
-/// sizes. Re-sketches only the two genomes in this pair (not the whole
-/// dataset) at each candidate k, using the same fixed sketch size and
-/// seed as the rest of the run. An existing sketch can't be
-/// "re-k-mer-ized" after the fact, k is fixed at sketch-creation time.
+/// below `target` (Borderline pairs get `target = RELIABLE_THRESHOLD`;
+/// Unreliable/NoSharedHashes pairs get `target = BORDERLINE_THRESHOLD`),
+/// by trying progressively smaller k-mer sizes.
+/// Re-sketches only the two genomes in this pair (not the whole dataset)
+/// at each candidate k, using the same fixed sketch size and seed as the
+/// rest of the run. An existing sketch can't be "re-k-mer-ized" after the
+/// fact: k is fixed at sketch-creation time.
 ///
 /// A candidate k is accepted only if it passes BOTH:
-///   - relative CI half-width on J at or under the Borderline threshold
-///     (the same acceptability bar used everywhere else), and
-///   - Mash's own significance test: the observed sharing must be
-///     distinguishable from two random, unrelated genomes at this k, not
-///     just numerically less noisy.
+///   - relative CI half-width on J at or under `target`, and
+///   - Mash's own significance test at or under `rescue_pvalue`: the
+///     observed sharing must be distinguishable from two random,
+///     unrelated genomes at this k, not just numerically less noisy.
 ///
 /// The floor is `k_computing` applied to the LARGER of the two genome
-/// sizes (at the existing 0.01 target probability): the larger genome is
-/// the more permissive one for chance k-mer collisions, so it
-/// sets the k below which "success" would just be k-mer-space
-/// exhaustion, not real homology.
-///
-/// Returns `Ok(Some(estimate))` with `estimate.rescued = true` and
-/// `estimate.kmer_size_used` set to the winning k, or `Ok(None)` if no
-/// candidate down to the floor passes both checks.
+/// sizes: the larger genome is the more permissive one for chance k-mer
+/// collisions, so it sets the k below which "success" would just be
+/// k-mer-space exhaustion, not real homology.
+#[allow(clippy::too_many_arguments)]
 fn attempt_kmer_rescue(
     query_path: &str,
     reference_path: &str,
@@ -69,8 +80,14 @@ fn attempt_kmer_rescue(
     current_kmer: u8,
     sketch_size: usize,
     seed: u64,
+    confidence: f64,
+    rescue_pvalue: f64,
+    target: f64,
 ) -> anyhow::Result<Option<DistanceEstimate>> {
-    let floor = k_computing(query_size.max(reference_size) as u32, 0.01);
+    let floor = k_computing(
+        query_size.max(reference_size) as u32,
+        FOFANOV_TARGET_PROBABILITY,
+    );
     let candidates = rescue_kmer_candidates(current_kmer, floor);
 
     let tmp = tempfile::tempdir()?;
@@ -97,7 +114,7 @@ fn attempt_kmer_rescue(
             continue;
         }
 
-        let Some((low, high)) = jaccard_ci_95(d.common_hashes, d.total_hashes) else {
+        let Some((low, high)) = jaccard_ci(d.common_hashes, d.total_hashes, confidence) else {
             continue;
         };
         let relative_uncertainty = (high - low) / (2.0 * d.jaccard);
@@ -109,10 +126,8 @@ fn attempt_kmer_rescue(
             candidate_k,
         );
 
-        if relative_uncertainty <= Reliability::BORDERLINE_THRESHOLD
-            && pvalue <= RESCUE_PVALUE_THRESHOLD
-        {
-            let mut estimate = annotate_with_uncertainty(&d, candidate_k);
+        if relative_uncertainty <= target && pvalue <= rescue_pvalue {
+            let mut estimate = annotate_with_uncertainty(&d, candidate_k, confidence);
             estimate.rescued = true;
             return Ok(Some(estimate));
         }
@@ -121,138 +136,23 @@ fn attempt_kmer_rescue(
     Ok(None)
 }
 
-/// Compute pairwise Mash distances annotated with an uncertainty estimate,
-/// attempting a k-mer-size rescue (`attempt_kmer_rescue`) for any pair
-/// that comes back Unreliable or NoSharedHashes at the run's k-mer size.
-///
-/// `sketch_size` and `seed` are needed here (not just `sketches`) because
-/// rescuing a pair means re-sketching just its two genomes from their
-/// original FASTA files at a smaller k.
-pub fn compute_distances_with_uncertainty(
-    sketches: Vec<Sketch>,
-    sketch_size: usize,
-    seed: u64,
-) -> Vec<DistanceEstimate> {
-    // SketchDistance doesn't carry genome sizes forward; keep them by
-    // name for the rescue path's significance test and k-floor.
-    let sizes: HashMap<String, u64> = sketches
-        .iter()
-        .map(|s| (s.name.clone(), s.seq_length))
-        .collect();
-
-    let kmer_length = sketches.first().map(|s| s.sketch_params.k()).unwrap_or(21);
-    let base_estimates = compute_base_distances_with_uncertainty(sketches);
-
-    let mut needs_larger_sketch = 0usize;
-    let mut rescued_count = 0usize;
-    let mut still_unresolvable = 0usize;
-    let mut rescue_errors: Vec<(String, String, String)> = Vec::new();
-
-    let estimates: Vec<DistanceEstimate> = base_estimates
-        .into_iter()
-        .map(|estimate| {
-            if !matches!(
-                estimate.reliability,
-                Reliability::Unreliable | Reliability::NoSharedHashes
-            ) {
-                return estimate;
-            }
-
-            // Gate: would more sketching alone already fix this? If so,
-            // don't spend a k-rescue attempt on it. Sketch size controls
-            // sampling precision, not whether real signal exists, so this
-            // is left to the user (`-s`) rather than auto-resketched.
-            let fixable_by_sketch_size = min_sketch_size_for_precision(
-                estimate.jaccard,
-                Reliability::BORDERLINE_THRESHOLD,
-                sketch_size as u64,
-                RESCUE_SKETCH_SIZE_CEILING,
-            )
-            .is_some();
-
-            if fixable_by_sketch_size {
-                needs_larger_sketch += 1;
-                return estimate;
-            }
-
-            let query_size = *sizes.get(&estimate.query_path).unwrap_or(&0);
-            let reference_size = *sizes.get(&estimate.reference_path).unwrap_or(&0);
-
-            match attempt_kmer_rescue(
-                &estimate.query_path,
-                &estimate.reference_path,
-                query_size,
-                reference_size,
-                kmer_length,
-                sketch_size,
-                seed,
-            ) {
-                Ok(Some(rescued)) => {
-                    rescued_count += 1;
-                    rescued
-                }
-                Ok(None) => {
-                    still_unresolvable += 1;
-                    estimate
-                }
-                Err(e) => {
-                    // A real I/O/sketching failure, not a biological
-                    // "genuinely divergent" result, keep it out of the
-                    // silent bucket.
-                    rescue_errors.push((
-                        estimate.query.clone(),
-                        estimate.reference.clone(),
-                        e.to_string(),
-                    ));
-                    still_unresolvable += 1;
-                    estimate
-                }
-            }
-        })
-        .collect();
-    if !rescue_errors.is_empty() {
-        eprintln!(
-            "Warning: {} rescue attempt(s) failed due to an I/O or sketching error, not a \
-             biological result, these pairs' 'unresolvable' status may not reflect their \
-             actual divergence:",
-            rescue_errors.len()
-        );
-        for (q, r, err) in &rescue_errors {
-            eprintln!("  - {} vs {}: {}", q, r, err);
-        }
-    }
-
-    if needs_larger_sketch > 0 || rescued_count > 0 || still_unresolvable > 0 {
-        println!(
-            "Rescue summary: {} pair(s) resolvable with a larger sketch size (see relative_uncertainty), \
-             {} pair(s) rescued with a smaller k-mer size (see kmer_size_used/rescued), \
-             {} pair(s) remain unresolvable at any k down to the genome-size-appropriate floor \
-             ({} of these were I/O/sketching errors, not biological results, see warnings above).",
-             needs_larger_sketch, rescued_count, still_unresolvable, rescue_errors.len()
-        );
-    }
-
-    estimates
-}
-
 /// Search for the smallest sketch size in `[min_size, max_size]` whose
-/// exact Clopper-Pearson relative CI half-width, for a hypothetical pair
-/// with Jaccard estimate `j`, would be at or under `target_precision`.
+/// exact CI relative half-width, for a hypothetical pair with Jaccard
+/// estimate `j`, would be at or under `target_precision`.
 ///
-/// Uses the exact CI (`jaccard_ci_95`) at each candidate size rather than
-/// a closed-form approximation. Relative uncertainty is monotonically
+/// Uses the exact CI (`jaccard_ci`) at each candidate size rather than a
+/// closed-form approximation. Relative uncertainty is monotonically
 /// non-increasing in sketch size for fixed `j`, so binary search is valid.
 ///
-/// Returns `None` if even `max_size` can't achieve the target. This is
-/// the gate `compute_distances_with_uncertainty` uses to tell "needs more
-/// sketching" apart from "genuinely needs a smaller k": sketch size
-/// controls the *sampling precision* of the Jaccard estimate given some
-/// true J, it cannot manufacture shared k-mers that aren't there.
+/// Returns `None` if even `max_size` can't achieve the target — the gate
+/// `compute_distances_with_uncertainty` uses to tell "needs more
+/// sketching" apart from "genuinely needs a smaller k."
 fn min_sketch_size_for_precision(
     j: f64,
     target_precision: f64,
     min_size: u64,
     max_size: u64,
+    confidence: f64,
 ) -> Option<u64> {
     if j <= 0.0 {
         return None;
@@ -260,7 +160,7 @@ fn min_sketch_size_for_precision(
 
     let meets_target = |s: u64| -> bool {
         let x = (j * s as f64).round() as u64;
-        match jaccard_ci_95(x, s) {
+        match jaccard_ci(x, s, confidence) {
             Some((low, high)) => (high - low) / (2.0 * j) <= target_precision,
             None => false,
         }
@@ -285,6 +185,112 @@ fn min_sketch_size_for_precision(
     Some(hi)
 }
 
+/// Compute pairwise Mash distances annotated with an uncertainty estimate.
+///
+/// When `no_rescue` is false (the default), attempts to upgrade any pair
+/// below its tier's target: Borderline pairs are pushed toward Reliable,
+/// Unreliable/NoSharedHashes pairs are pushed toward Borderline-or-better.
+/// Before spending a k-mer rescue attempt, checks whether a larger sketch
+/// alone (up to a ceiling) would already clear the bar. Sketch size
+/// governs sampling precision, not whether real signal exists, so growing
+/// it is left to the user (`-s`), not done silently per pair.
+///
+/// When `no_rescue` is true, every pair is reported exactly as computed at
+/// the run's single k-mer size, with no attempt to improve it.
+pub fn compute_distances_with_uncertainty(
+    sketches: Vec<Sketch>,
+    sketch_size: usize,
+    seed: u64,
+    confidence: f64,
+    rescue_pvalue: f64,
+    no_rescue: bool,
+) -> (Vec<DistanceEstimate>, RescueSummary) {
+    // Captured before `sketches` is moved into compute_base_distances_with_uncertainty.
+    let sizes: HashMap<String, u64> = sketches
+        .iter()
+        .map(|s| (s.name.clone(), s.seq_length))
+        .collect();
+    let kmer_length = sketches.first().map(|s| s.sketch_params.k()).unwrap_or(21);
+
+    let base_estimates = compute_base_distances_with_uncertainty(sketches, confidence);
+
+    if no_rescue {
+        return (base_estimates, RescueSummary::default());
+    }
+
+    let mut needs_larger_sketch = 0usize;
+    let mut unreliable_rescued = 0usize;
+    let mut borderline_rescued = 0usize;
+    let mut still_unresolvable = 0usize;
+
+    let estimates: Vec<DistanceEstimate> = base_estimates
+        .into_iter()
+        .map(|estimate| {
+            let target = match estimate.reliability {
+                Reliability::Reliable => return estimate,
+                Reliability::Borderline => Reliability::RELIABLE_THRESHOLD,
+                Reliability::Unreliable | Reliability::NoSharedHashes => {
+                    Reliability::BORDERLINE_THRESHOLD
+                }
+            };
+            let started_borderline = matches!(estimate.reliability, Reliability::Borderline);
+
+            let fixable_by_sketch_size = min_sketch_size_for_precision(
+                estimate.jaccard,
+                target,
+                sketch_size as u64,
+                RESCUE_SKETCH_SIZE_CEILING,
+                confidence,
+            )
+            .is_some();
+
+            if fixable_by_sketch_size {
+                needs_larger_sketch += 1;
+                return estimate;
+            }
+
+            let query_size = *sizes.get(&estimate.query_path).unwrap_or(&0);
+            let reference_size = *sizes.get(&estimate.reference_path).unwrap_or(&0);
+
+            match attempt_kmer_rescue(
+                &estimate.query_path,
+                &estimate.reference_path,
+                query_size,
+                reference_size,
+                kmer_length,
+                sketch_size,
+                seed,
+                confidence,
+                rescue_pvalue,
+                target,
+            ) {
+                Ok(Some(rescued)) => {
+                    if started_borderline {
+                        borderline_rescued += 1;
+                    } else {
+                        unreliable_rescued += 1;
+                    }
+                    rescued
+                }
+                _ => {
+                    still_unresolvable += 1;
+                    estimate
+                }
+            }
+        })
+        .collect();
+
+    (
+        estimates,
+        RescueSummary {
+            needs_larger_sketch,
+            unreliable_rescued,
+            borderline_rescued,
+            still_unresolvable,
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,22 +307,19 @@ mod tests {
 
     #[test]
     fn test_min_sketch_size_for_precision() {
-        // Solved size should actually achieve the target when re-checked.
         let j = 0.10;
         let target = 0.10;
-        let size = min_sketch_size_for_precision(j, target, 200, 100_000).unwrap();
+        let size = min_sketch_size_for_precision(j, target, 200, 100_000, 0.95).unwrap();
         let x = (j * size as f64).round() as u64;
-        let (low, high) = jaccard_ci_95(x, size).unwrap();
+        let (low, high) = jaccard_ci(x, size, 0.95).unwrap();
         let achieved = (high - low) / (2.0 * j);
         assert!(achieved <= target + 1e-6);
 
-        // A tighter target should never need a smaller sketch size.
-        let loose = min_sketch_size_for_precision(0.10, 0.30, 200, 100_000).unwrap();
-        let tight = min_sketch_size_for_precision(0.10, 0.05, 200, 100_000).unwrap();
+        let loose = min_sketch_size_for_precision(0.10, 0.30, 200, 100_000, 0.95).unwrap();
+        let tight = min_sketch_size_for_precision(0.10, 0.05, 200, 100_000, 0.95).unwrap();
         assert!(tight >= loose);
 
-        // Genuinely near-zero J: unresolvable within a sane ceiling.
-        assert!(min_sketch_size_for_precision(0.0005, 0.10, 200, 100_000).is_none());
+        assert!(min_sketch_size_for_precision(0.0005, 0.10, 200, 100_000, 0.95).is_none());
     }
 
     fn make_sketch(
@@ -361,37 +364,47 @@ mod tests {
 
     #[test]
     fn test_pair_fixable_by_larger_sketch_never_attempts_kmer_rescue() {
-        // J=0.1 at a small sketch size (200): Unreliable, but
-        // min_sketch_size_for_precision confirms a larger sketch alone
-        // would fix it (within the 100,000 ceiling), so the pair should
-        // never reach attempt_kmer_rescue at all -- this pair's fake
-        // sketch names don't correspond to real files, so if the gate
-        // were wrong, this test would fail on file I/O instead of on an
-        // assertion.
         let p = make_sketch("P", 0..20, 1_000_000, 180);
         let q = make_sketch("Q", 0..20, 2_000_000, 180);
 
-        let estimates = compute_distances_with_uncertainty(vec![p, q], 200, 42);
+        let (estimates, summary) =
+            compute_distances_with_uncertainty(vec![p, q], 200, 42, 0.95, 0.01, false);
 
         assert_eq!(estimates.len(), 1);
         assert_eq!(estimates[0].reliability, Reliability::Unreliable);
         assert!(!estimates[0].rescued);
+        assert_eq!(summary.needs_larger_sketch, 1);
+        assert_eq!(summary.unreliable_rescued, 0);
+        assert_eq!(summary.borderline_rescued, 0);
     }
 
     #[test]
     fn test_genuinely_unresolvable_pair_fails_gracefully_without_panicking() {
-        // J=0.0001: genuinely unresolvable by sketch size alone even at
-        // the ceiling, so this DOES reach attempt_kmer_rescue -- which
-        // will fail immediately since "R"/"S" aren't real files on disk.
-        // This confirms that failure surfaces as an unchanged, still-
-        // Unreliable estimate rather than a panic.
         let r = make_sketch("R", 0..1, 10_000_000, 9999);
         let s = make_sketch("S", 0..1, 20_000_000, 9999);
 
-        let estimates = compute_distances_with_uncertainty(vec![r, s], 10000, 42);
+        let (estimates, summary) =
+            compute_distances_with_uncertainty(vec![r, s], 10000, 42, 0.95, 0.01, false);
 
         assert_eq!(estimates.len(), 1);
         assert_eq!(estimates[0].reliability, Reliability::Unreliable);
         assert!(!estimates[0].rescued);
+        assert_eq!(summary.still_unresolvable, 1);
+    }
+
+    #[test]
+    fn test_no_rescue_flag_skips_everything() {
+        let r = make_sketch("R", 0..1, 10_000_000, 9999);
+        let s = make_sketch("S", 0..1, 20_000_000, 9999);
+
+        let (estimates, summary) =
+            compute_distances_with_uncertainty(vec![r, s], 10000, 42, 0.95, 0.01, true);
+
+        assert_eq!(estimates.len(), 1);
+        assert_eq!(estimates[0].reliability, Reliability::Unreliable);
+        // no_rescue must produce identical output to the base (unrescued)
+        // computation -- summary is all zeros, no rescue attempted at all.
+        assert_eq!(summary.needs_larger_sketch, 0);
+        assert_eq!(summary.still_unresolvable, 0);
     }
 }

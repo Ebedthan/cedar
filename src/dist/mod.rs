@@ -1,48 +1,80 @@
-pub mod rescue;
+use anyhow::Result;
 
 use crate::cli;
 use crate::mash::sketch::create_and_load_sketches;
 use crate::mash::uncertainty::Reliability;
 use crate::utils;
 
-use anyhow::Result;
+pub mod rescue;
 
 /// `cedar dist`: compute pairwise Mash distances annotated with an
-/// uncertainty estimate on each one. No tree is built, this is for the
-/// "is this pair a solid species-boundary call" moment, not for producing
-/// a phylogeny.
+/// uncertainty estimate on each one.
+/// No tree is built. This is for the  "is this pair a solid species-boundary call"
+/// moment, not for producing a phylogeny. A summary is always printed to stderr.
+/// The full TSV is only written if `-o/--output` is given.
 pub fn compute_pairwise_distances(args: &cli::DistArgs) -> Result<()> {
-    // Validate and collect input files
-    let inputs = utils::validate_and_collect_inputs(&args.indir)?;
+    if !(args.uncertainty.confidence > 0.5 && args.uncertainty.confidence < 1.0) {
+        anyhow::bail!(
+            "--confidence must be strictly between 0.5 and 1.0, got {}",
+            args.uncertainty.confidence
+        );
+    }
+    if !(args.uncertainty.rescue_pvalue > 0.0 && args.uncertainty.rescue_pvalue < 1.0) {
+        anyhow::bail!(
+            "--rescue-pvalue must be strictly between 0.0 and 1.0, got {}",
+            args.uncertainty.rescue_pvalue
+        );
+    }
 
-    // Compute genome statistics and flag genome-size outliers up front
-    // an outlier genome size undermines the k-mer size choice for every
-    // pairwise distance computed from it, exactly as it would for `build`.
+    let inputs = utils::validate_and_collect_inputs(&args.inputs)?;
+
     let stats = utils::compute_genome_stats(&inputs)?;
-    //utils::check_genome_outliers(&stats, utils::DEFAULT_OUTLIER_THRESHOLD)?;
+    utils::check_genome_outliers(&stats, utils::DEFAULT_OUTLIER_THRESHOLD)?;
 
-    // Determine k-mer size: manual override, or the same default heuristic
-    // `build` uses. `--target-precision`-driven selection isn't implemented
-    // yet, so it's rejected explicitly here rather than silently ignored.
     let kmer_size = utils::determine_kmer_size(&args.sketch, &stats)?;
 
-    // Create sketches
     let sketches =
-        create_and_load_sketches(&args.indir, args.sketch.size, args.sketch.seed, kmer_size)?;
+        create_and_load_sketches(&inputs, args.sketch.size, args.sketch.seed, kmer_size)?;
 
-    // Compute pairwise distances, each with an uncertainty estimate
-    let estimates =
-        rescue::compute_distances_with_uncertainty(sketches, args.sketch.size, args.sketch.seed);
+    let (estimates, summary) = rescue::compute_distances_with_uncertainty(
+        sketches,
+        args.sketch.size,
+        args.sketch.seed,
+        args.uncertainty.confidence,
+        args.uncertainty.rescue_pvalue,
+        args.no_rescue,
+    );
 
     let flagged = estimates
         .iter()
         .filter(|e| e.reliability != Reliability::Reliable)
         .count();
-    println!(
+
+    eprintln!(
         "{} pairwise distances computed ({} flagged as borderline, unreliable, or lacking shared hashes)",
         estimates.len(),
         flagged
     );
+    if !args.no_rescue {
+        eprintln!(
+            "Rescue: {} unreliable/no-shared-hashes => borderline-or-better, \
+             {} borderline => reliable, {} pair(s) resolvable with a larger sketch size, \
+             {} pair(s) still unresolvable at any k down to the genome-size-appropriate floor.",
+            summary.unreliable_rescued,
+            summary.borderline_rescued,
+            summary.needs_larger_sketch,
+            summary.still_unresolvable
+        );
+    }
+    eprintln!(
+        "Confidence level: {:.0}%, rescue significance threshold: {}",
+        args.uncertainty.confidence * 100.0,
+        args.uncertainty.rescue_pvalue
+    );
 
-    utils::output_distance_table(args.output.clone(), &estimates)
+    if let Some(output_path) = &args.output {
+        utils::output_distance_table(Some(output_path.clone()), &estimates)?;
+    }
+
+    Ok(())
 }
