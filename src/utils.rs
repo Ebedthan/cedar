@@ -210,9 +210,10 @@ pub fn format_genome_size(size: usize) -> String {
 }
 
 /// Detect influential genome's size.
+///
 /// If the set of submitted genomes is less than 4, then use
 /// the leave-one-out mean impact method, else use the IQR method.
-/// If impactᵢ < ε × μ  → negligible.
+/// If impactᵢ < ε × μ  => negligible.
 ///
 /// **Inputs:**
 ///     - `data`: a vec of tupe containing the genome ID and size.
@@ -347,19 +348,6 @@ pub fn validate_and_collect_inputs(inputs: &[String]) -> Result<Vec<PathBuf>> {
         anyhow::bail!(
             "Input validation error: Only FASTA files are allowed. Invalid files: {:?}",
             invalid_files
-        );
-    }
-
-    let multi_seq_files: Vec<_> = valid_files
-        .iter()
-        .zip(validation_results.iter())
-        .filter_map(|(path, (_, is_multi))| if *is_multi { Some(path) } else { None })
-        .collect();
-
-    if !multi_seq_files.is_empty() {
-        anyhow::bail!(
-            "Input validation error: Multi-sequence FASTA files detected: {:?}",
-            multi_seq_files
         );
     }
 
