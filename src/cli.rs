@@ -27,6 +27,8 @@ pub enum Commands {
     Build(BuildArgs),
     /// Compute pairwise Mash distances with uncertainty estimates (no tree)
     Dist(DistArgs),
+    /// Sketch FASTA files to .msh files for later reuse
+    Sketch(SketchOnlyArgs),
 }
 
 /// Sketching options shared between `build` and `dist`.
@@ -137,8 +139,14 @@ pub struct BuildArgs {
     /// unreliable) pairs, search for a smaller dataset-wide k-mer size
     /// that resolves them, rather than proceeding with a tree built partly
     /// on unreliable data.
-    #[arg(long, help_heading = "Tree options")]
+    #[arg(long, conflicts_with = "from_sketches", help_heading = "Tree options")]
     pub include_div_pairs: bool,
+
+    /// Load pre-computed .msh sketch files from DIR instead of re-sketching
+    /// from FASTA. Cannot be combined with --include-div-pairs, which
+    /// requires re-sketching the whole dataset at smaller k-mer sizes.
+    #[arg(long, value_name = "DIR", conflicts_with_all = ["include_div_pairs"], help_heading = "Sketching options")]
+    pub from_sketches: Option<String>,
 
     #[command(flatten)]
     pub sketch: SketchArgs,
@@ -158,6 +166,12 @@ pub struct DistArgs {
     #[arg(short, value_name = "FILE")]
     pub output: Option<String>,
 
+    /// Load pre-computed .msh sketch files from DIR instead of re-sketching
+    /// from FASTA. Cannot be combined with --include-div-pairs, which
+    /// requires re-sketching the whole dataset at smaller k-mer sizes.
+    #[arg(long, value_name = "DIR", help_heading = "Sketching options")]
+    pub from_sketches: Option<String>,
+
     /// Disable the k-mer rescue mechanism: report every pair at the run's
     /// single k-mer size, with no attempt to improve borderline/unreliable
     /// results. Useful for reproducing a plain, single-k comparison.
@@ -169,6 +183,20 @@ pub struct DistArgs {
 
     #[command(flatten)]
     pub uncertainty: UncertaintyArgs,
+}
+
+#[derive(Args, Debug)]
+struct SketchOnlyArgs {
+    /// Input FASTA files and/or directories containing FASTA files
+    #[arg(value_name = "PATH", required = true, num_args = 1..)]
+    pub inputs: Vec<String>,
+
+    /// Output directory for .msh sketch files
+    #[arg(short, long, value_name = "DIR", default_value = "cedar_sketches")]
+    pub output_dir: String,
+
+    #[command(flatten)]
+    pub sketch: SketchArgs,
 }
 
 #[cfg(test)]
