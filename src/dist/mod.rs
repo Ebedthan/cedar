@@ -26,6 +26,15 @@ pub fn compute_pairwise_distances(args: &cli::DistArgs, cli_verbose: bool) -> Re
         );
     }
 
+    if args.from_sketches.is_none() && args.inputs.is_empty() {
+        anyhow::bail!(
+            "at least one input PATH is required when --from-sketches is not given.\n\
+            Usage:\n\
+            \tcedar dist <PATH>... [OPTIONS]\n\
+            \tcedar dist --from-sketches <SKETCH_DIR> [OPTIONS]"
+        );
+    }
+
     let inputs = if args.from_sketches.is_some() {
         Vec::new()
     } else {

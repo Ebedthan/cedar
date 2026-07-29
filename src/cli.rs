@@ -94,8 +94,9 @@ pub struct UncertaintyArgs {
 
 #[derive(Args, Debug)]
 pub struct BuildArgs {
-    /// Input FASTA files and/or directories containing FASTA files
-    #[arg(value_name = "PATH", required = true, num_args = 1..)]
+    /// Input FASTA files and/or directories containing FASTA files.
+    /// Not required when loading from pre-computed sketches.
+    #[arg(value_name = "PATH", num_args = 0..)]
     pub inputs: Vec<String>,
 
     /// Output tree (Newick) to FILE
@@ -157,8 +158,9 @@ pub struct BuildArgs {
 
 #[derive(Args, Debug)]
 pub struct DistArgs {
-    /// Input FASTA files and/or directories containing FASTA files
-    #[arg(value_name = "PATH", required = true, num_args = 1..)]
+    /// Input FASTA files and/or directories containing FASTA files.
+    /// Not required when loading from pre-computed sketches.
+    #[arg(value_name = "PATH", num_args = 0..)]
     pub inputs: Vec<String>,
 
     /// Output distance table (TSV) to FILE; a summary is always printed to
@@ -224,7 +226,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dist_parses_with_output_and_sketch_overrides() {
+    fn test_dist_with_fasta_inputs() {
         let cli = Cli::try_parse_from([
             "cedar", "dist", "genomes/", "-o", "out.tsv", "-s", "5000", "-k", "15",
         ])
@@ -232,9 +234,28 @@ mod tests {
         match cli.command {
             Commands::Dist(args) => {
                 assert_eq!(args.inputs, vec!["genomes/"]);
-                assert_eq!(args.output, Some("out.tsv".to_string()));
-                assert_eq!(args.sketch.size, 5000);
-                assert_eq!(args.sketch.kmer, Some(15));
+                assert!(args.from_sketches.is_none());
+            }
+            _ => panic!("expected Dist"),
+        }
+    }
+
+    #[test]
+    fn test_dist_from_sketches_requires_no_input_paths() {
+        // --from-sketches alone, no positional paths -- must parse cleanly.
+        let cli = Cli::try_parse_from([
+            "cedar",
+            "dist",
+            "--from-sketches",
+            "my_sketches/",
+            "-o",
+            "out.tsv",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Dist(args) => {
+                assert!(args.inputs.is_empty());
+                assert_eq!(args.from_sketches.as_deref(), Some("my_sketches/"));
             }
             _ => panic!("expected Dist"),
         }
