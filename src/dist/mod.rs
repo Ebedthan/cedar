@@ -1,8 +1,9 @@
 use anyhow::Result;
 
 use crate::cli;
-use crate::mash::sketch::create_and_load_sketches;
+use crate::mash::sketch::{create_and_load_sketches, load_sketches};
 use crate::utils;
+use crate::utils::KmerSelection;
 
 pub mod rescue;
 
@@ -25,16 +26,42 @@ pub fn compute_pairwise_distances(args: &cli::DistArgs, cli_verbose: bool) -> Re
         );
     }
 
-    let inputs = utils::validate_and_collect_inputs(&args.inputs)?;
+    let inputs = if args.from_sketches.is_some() {
+        Vec::new()
+    } else {
+        utils::validate_and_collect_inputs(&args.inputs)?
+    };
 
-    let stats = utils::compute_genome_stats(&inputs)?;
+    let (sketches, stats, kmer, outliers) = match &args.from_sketches {
+        Some(sketch_dir) => {
+            let sketches = load_sketches(sketch_dir)?;
+            let stats: Vec<(String, usize)> = sketches
+                .iter()
+                .map(|s| (s.name.clone(), s.seq_length as usize))
+                .collect();
 
-    let outliers = utils::check_genome_outliers(&stats, utils::DEFAULT_OUTLIER_THRESHOLD);
+            let kmer = KmerSelection {
+                kmer_size: sketches.first().map(|s| s.sketch_params.k()).unwrap_or(21),
+                user_specified: true, // true because loaded k as 'user-determined'
+                mean_genome_size: None,
+            };
+            let outliers = utils::check_genome_outliers(&stats, utils::DEFAULT_OUTLIER_THRESHOLD);
+            (sketches, stats, kmer, outliers)
+        }
+        None => {
+            let stats = utils::compute_genome_stats(&inputs)?;
 
-    let kmer = utils::determine_kmer_size(&args.sketch, &stats)?;
-
-    let sketches =
-        create_and_load_sketches(&inputs, args.sketch.size, args.sketch.seed, kmer.kmer_size)?;
+            let kmer = utils::determine_kmer_size(&args.sketch, &stats)?;
+            let sketches = create_and_load_sketches(
+                &inputs,
+                args.sketch.size,
+                args.sketch.seed,
+                kmer.kmer_size,
+            )?;
+            let outliers = utils::check_genome_outliers(&stats, utils::DEFAULT_OUTLIER_THRESHOLD);
+            (sketches, stats, kmer, outliers)
+        }
+    };
 
     let (estimates, summary) = rescue::compute_distances_with_uncertainty(
         sketches,

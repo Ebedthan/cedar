@@ -186,7 +186,7 @@ pub struct DistArgs {
 }
 
 #[derive(Args, Debug)]
-struct SketchOnlyArgs {
+pub struct SketchOnlyArgs {
     /// Input FASTA files and/or directories containing FASTA files
     #[arg(value_name = "PATH", required = true, num_args = 1..)]
     pub inputs: Vec<String>,
@@ -272,5 +272,57 @@ mod tests {
             result.is_err(),
             "arg_required_else_help should reject no subcommand"
         );
+    }
+
+    #[test]
+    fn test_from_sketches_conflicts_with_include_div_pairs() {
+        let result = Cli::try_parse_from([
+            "cedar",
+            "build",
+            "--from-sketches",
+            "my_sketches/",
+            "--include-div-pairs",
+            "genomes/",
+        ]);
+        assert!(
+            result.is_err(),
+            "expected --from-sketches and --include-div-pairs to conflict"
+        );
+    }
+
+    #[test]
+    fn test_sketch_subcommand_parses() {
+        let cli =
+            Cli::try_parse_from(["cedar", "sketch", "genomes/", "-o", "my_sketches/"]).unwrap();
+        match cli.command {
+            Commands::Sketch(args) => {
+                assert_eq!(args.inputs, vec!["genomes/"]);
+                assert_eq!(args.output_dir, "my_sketches/");
+            }
+            _ => panic!("expected Sketch"),
+        }
+    }
+
+    #[test]
+    fn test_sketch_accepts_multiple_inputs() {
+        let cli = Cli::try_parse_from([
+            "cedar",
+            "sketch",
+            "file1.fna",
+            "file2.fna",
+            "dir/",
+            "-s",
+            "2000",
+            "-o",
+            "out/",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Sketch(args) => {
+                assert_eq!(args.inputs.len(), 3);
+                assert_eq!(args.sketch.size, 2000);
+            }
+            _ => panic!("expected Sketch"),
+        }
     }
 }

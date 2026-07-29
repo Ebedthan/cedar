@@ -448,10 +448,14 @@ pub fn print_run_summary(
 
     eprintln!(" PARAMETERS");
     let k_note = if kmer.user_specified {
-        "user-specified".to_string()
+        if kmer.mean_genome_size.is_none() {
+            "from pre-computed sketches".to_string()
+        } else {
+            "user-specified".to_string()
+        }
     } else {
         format!(
-            "auto, p=0.01, mean {}",
+            "auto, p = 0.01, mean {}",
             compact_size(kmer.mean_genome_size.unwrap_or(0) as usize)
         )
     };

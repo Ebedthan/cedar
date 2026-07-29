@@ -10,6 +10,8 @@ use finch::{
 use rayon::iter::IntoParallelIterator;
 use rayon::prelude::*;
 
+use anyhow::Context;
+
 /// Compute the value of k that minimizes the probability of
 /// observing a random k-mer.
 ///
@@ -91,6 +93,101 @@ pub fn create_and_load_sketches(
             Ok(acc)
         })?;
     Ok(sketches)
+}
+
+/// `cedar sketch`: sketch FASTA files to .msh files in `output_dir`
+/// for later reuse with --from-sketches. Mirrors `mash sketch`'s role
+/// in Mash's own cli.
+pub fn sketch_only(
+    inputs: &[PathBuf],
+    sketch_size: usize,
+    seed: u64,
+    kmer_size: u8,
+    output_dir: &str,
+) -> anyhow::Result<Vec<String>> {
+    let paths = create_sketches(inputs, kmer_size, sketch_size, seed, output_dir)?;
+
+    for p in &paths {
+        println!("  sketched => {}", p);
+    }
+
+    Ok(paths)
+}
+
+/// Load pre-computed .msh sketch files from `sketch_dir`, checking that
+/// every sketch's own recorder parameters (k-mer size, sketch size, seed)
+/// are mutually consistent across the set. Inconsistent parameters would
+/// silently produce a mixed-parameter distance matrix.
+pub fn load_sketches(sketch_dir: &str) -> anyhow::Result<Vec<Sketch>> {
+    let entries: Vec<PathBuf> = fs::read_dir(sketch_dir)?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().map(|e| e == "msh").unwrap_or(false))
+        .collect();
+
+    if entries.is_empty() {
+        anyhow::bail!(
+            "--from-sketches directory '{}' contains no .msh files",
+            sketch_dir
+        );
+    }
+
+    let sketches: Vec<Sketch> = entries
+        .into_par_iter()
+        .map(|path| {
+            let batch = finch::open_sketch_file(&path)
+                .with_context(|| format!("Failed to load sketch: {}", path.display()))?;
+            Ok(batch)
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect();
+
+    // Consistency check: all sketches in a --from-sketches run
+    // must have been created with the same k, sketch size, and seed.
+    // Loading a mix would silently produce distance that aren't comparable
+    // to each other.
+    let first_params = sketches.first().map(|s| s.sketch_params.clone());
+    if let Some(ref expected) = first_params {
+        let mismatched: Vec<&str> = sketches
+            .iter()
+            .filter(|s| &s.sketch_params != expected)
+            .map(|s| s.name.as_str())
+            .collect();
+
+        if !mismatched.is_empty() {
+            anyhow::bail!(
+                "--from-sketches: the following sketches were created with \
+                different parameters (k/sketch-size/seed) than the first \
+                sketch in the directory. All sketches in one run must be \
+                from the same parameters to produce comparable distances:\n {}",
+                mismatched.join("\n  ")
+            );
+        }
+    }
+
+    eprintln!(
+        "Loaded {} sketch(es) from '{}' (k = {}, s = {})",
+        sketches.len(),
+        sketch_dir,
+        sketches.first().map(|s| s.sketch_params.k()).unwrap_or(0),
+        sketches
+            .first()
+            .map(|s| sketch_size_of(&s.sketch_params))
+            .unwrap_or(0),
+    );
+
+    Ok(sketches)
+}
+
+/// Extract the final sketch size from SketchParams.
+/// Needed for the consistency check log line above.
+fn sketch_size_of(params: &SketchParams) -> usize {
+    match params {
+        SketchParams::Mash { final_size, .. } => *final_size,
+        SketchParams::Scaled { .. } => 0,
+        SketchParams::AllCounts { .. } => 0,
+    }
 }
 
 #[cfg(test)]

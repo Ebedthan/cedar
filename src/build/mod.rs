@@ -13,8 +13,9 @@ use finch::serialization::Sketch;
 use crate::build::connectivity::connectivity_edges;
 use crate::build::matrix::TreeAlgorithm;
 use crate::dist::rescue::rescue_kmer_candidates;
-use crate::mash::sketch::{create_and_load_sketches, k_computing};
+use crate::mash::sketch::{create_and_load_sketches, k_computing, load_sketches};
 use crate::mash::uncertainty::compute_base_distances_with_uncertainty;
+use crate::utils::KmerSelection;
 
 /// Configuration for phylogenetic analysis
 #[derive(Debug, Clone)]
@@ -130,20 +131,45 @@ pub fn build_tree_using_mash_distance(args: &cli::BuildArgs, threads: usize) -> 
         ..Default::default()
     };
 
-    // Validate and collect input files (files and/or directories)
-    let inputs = utils::validate_and_collect_inputs(&args.inputs)?;
+    // --from-sketch and explicit input paths are mutually exclusive
+    // if a sketch dir is given, there's nothing to do with raw FASTA paths.
+    let inputs = if args.from_sketches.is_some() {
+        Vec::new()
+    } else {
+        utils::validate_and_collect_inputs(&args.inputs)?
+    };
 
-    // Compute genome statistics in parallel and genome size outliers
-    let stats = utils::compute_genome_stats(&inputs)?;
-
-    let _outliers = utils::check_genome_outliers(&stats, utils::DEFAULT_OUTLIER_THRESHOLD);
-
-    // Determine k-mer size
-    let kmer = utils::determine_kmer_size(&args.sketch, &stats)?;
-
-    // Create sketches
-    let mut sketches =
-        create_and_load_sketches(&inputs, args.sketch.size, args.sketch.seed, kmer.kmer_size)?;
+    let (mut sketches, stats, kmer) = match &args.from_sketches {
+        Some(sketch_dir) => {
+            // Load pre-computed sketches; derive genome stats from the
+            // sketches' own metadata (seq_length) rather tahn re-reading
+            // raw FASTA, since FASTA may no longer be available.
+            let sketches = load_sketches(sketch_dir)?;
+            let stats: Vec<(String, usize)> = sketches
+                .iter()
+                .map(|s| (s.name.clone(), s.seq_length as usize))
+                .collect();
+            let _outliers = utils::check_genome_outliers(&stats, utils::DEFAULT_OUTLIER_THRESHOLD);
+            let kmer = KmerSelection {
+                kmer_size: sketches.first().map(|s| s.sketch_params.k()).unwrap_or(21),
+                user_specified: true, // true because loaded k as 'user-determined'
+                mean_genome_size: None,
+            };
+            (sketches, stats, kmer)
+        }
+        None => {
+            let stats = utils::compute_genome_stats(&inputs)?;
+            let _outliers = utils::check_genome_outliers(&stats, utils::DEFAULT_OUTLIER_THRESHOLD);
+            let kmer = utils::determine_kmer_size(&args.sketch, &stats)?;
+            let sketch = create_and_load_sketches(
+                &inputs,
+                args.sketch.size,
+                args.sketch.seed,
+                kmer.kmer_size,
+            )?;
+            (sketch, stats, kmer)
+        }
+    };
 
     // Evaluate reliability at this k for every pair and check whether
     // excluding divergent pairs would still leave every genome connected
