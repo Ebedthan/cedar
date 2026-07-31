@@ -2,244 +2,272 @@
 
 **Uncertainty-aware distance-based phylogenomics from Mash sketches.**
 
-[![CI](https://github.com/Ebedthan/cedar/actions/workflows/ci.yml/badge.svg)](https://github.com/Ebedthan/cedar/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/Ebedthan/cedar/graph/badge.svg?token=S3OLFFHF4X)](https://codecov.io/gh/Ebedthan/cedar)
-[![License](https://img.shields.io/badge/license-MIT-blue?style=flat)](https://github.com/Ebedthan/cedar/blob/main/LICENSE)
+`cedar` computes pairwise Mash distances between genomes and propagates statistical uncertainty through every result, reporting exact Clopper–Pearson confidence intervals on each distance and flagging estimates that cannot be trusted at the requested confidence level. It is the to the best of our knowledge, the first distance-based phylogenomic tool to tell you how much to trust its own output.
 
-`cedar` computes MinHash (Mash) distances between genomes and, unlike existing
-Mash-based tools, propagates the *statistical uncertainty* of those distances
-through to every downstream result, a pairwise comparison, a tree topology,
-or a decision about whether two genomes can even be reliably compared at all.
+## Features
 
-## Why cedar
-
-Mash itself already tells you, in principle, how much to trust a distance
-estimate: sketch size bounds the sampling error of the underlying Jaccard
-estimate, and Mash's own significance test can tell a real signal from chance
-k-mer collisions (Ondov et al., 2016, *Genome Biology*). In practice, almost
-nothing downstream of Mash actually uses that information, a distance
-matrix is a distance matrix, and a neighbor-joining tree treats every entry
-in it as equally trustworthy.
-
-`cedar` doesn't. It computes an **exact confidence interval** on every
-pairwise Jaccard/Mash-distance estimate (Clopper–Pearson, not a normal
-approximation, the latter is known to be unreliable for exactly the
-divergent-genome case where it matters most), classifies each pair's
-reliability, and:
-
-- for **`cedar dist`**, attempts to *rescue* a genuinely divergent pair by
-  searching for a smaller k-mer size, but only accepts a rescue if it passes
-  Mash's own significance test too, not just a tighter-looking interval (a
-  small enough k will always eventually produce *some* shared k-mers by
-  chance alone; the significance check is what keeps a rescue honest).
-- for **`cedar build`**, checks whether unreliable pairs are structurally
-  necessary to keep the tree's genomes connected at all (via a minimum
-  spanning tree over the resolvable/divergent distinction), flags exactly
-  which ones if so, and can search for a smaller dataset-wide k-mer size to
-  resolve them (`--include-div-pairs`) rather than silently building a tree
-  on data it can't vouch for.
+- Exact 95% (or user-specified) Clopper–Pearson confidence intervals on every pairwise Jaccard and Mash distance
+- Per-pair reliability tiers: **reliable**, **borderline**, **unreliable**, **no shared hashes**
+- K-mer rescue mechanism: automatically searches for a smaller k-mer size that resolves borderline and unreliable pairs, subject to dual statistical checks (CI width + Mash significance test)
+- Connectivity analysis: detects genomes that can only be connected via divergent pairs before building a tree, and optionally resolves them with a global k-mer search (`--include-div-pairs`)
+- Bootstrap and jackknife consensus trees with branch support values
+- Pre-computed sketch reuse: sketch once, run many times with `cedar sketch` + `--from-sketches`
+- Parallelised throughout with rayon
 
 ## Installation
 
-Build from source:
-
 ```bash
-git clone https://github.com/Ebedthan/cedar
-cd cedar
-cargo build --release
-# binary at target/release/cedar
+cargo install --path .
 ```
 
-Requires Rust 1.89.0 or newer (MSRV, driven by the `statrs` dependency).
+Minimum supported Rust version: **1.89.0**
 
 ## Quick start
 
 ```bash
-# Build a neighbor-joining tree with bootstrap support
-cedar build genomes/ -B 1000 -o tree.nwk
+# All in one pass (sketch + distances)
+cedar dist genomes/*.fna -o distances.tsv
 
-# Compute pairwise distances with uncertainty estimates, no tree
+# Build a neighbour-joining tree with 100 bootstrap replicates
+cedar build genomes/*.fna -B 100 -o tree.nwk
+
+# Sketch once, reuse many times
+cedar sketch genomes/*.fna -o sketches/
+cedar dist  --from-sketches sketches/ -o distances.tsv
+cedar build --from-sketches sketches/ -B 100 -o tree.nwk
+```
+
+## Subcommands
+
+### `cedar sketch`
+
+Sketch FASTA files to `.msh` files for later reuse. Accepts individual files, directories, or a mix of both.
+
+```
+cedar sketch [OPTIONS] <PATH>...
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `-o, --output-dir <DIR>` | `cedar_sketches` | Output directory for `.msh` files |
+| `-s, --size <INT>` | 1000 | Sketch size (number of hashes) |
+| `-S, --seed <INT>` | 42 | Hash seed |
+| `-k, --kmer <INT>` | auto | K-mer size (auto-computed from genome size if not set) |
+
+```bash
+cedar sketch genomes/ -o my_sketches/ -s 2000
+cedar sketch file1.fna file2.fna dir/ -o my_sketches/
+```
+
+### `cedar dist`
+
+Compute pairwise Mash distances with uncertainty estimates. Always prints a structured summary to stderr; the full distance table is only written when `-o` is given.
+
+```
+cedar dist [OPTIONS] <PATH>...
+cedar dist --from-sketches <DIR> [OPTIONS]
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `-o, --output <FILE>` | — | Write TSV distance table to FILE |
+| `--from-sketches <DIR>` | — | Load pre-computed `.msh` files instead of re-sketching |
+| `--confidence <FLOAT>` | 0.95 | Confidence level for the Jaccard/Mash-distance interval |
+| `--rescue-pvalue <FLOAT>` | 0.01 | P-value threshold for the k-mer rescue significance test |
+| `--no-rescue` | off | Disable k-mer rescue; report every pair at the run's single k |
+| `-s, --size <INT>` | 1000 | Sketch size |
+| `-S, --seed <INT>` | 42 | Hash seed |
+| `-k, --kmer <INT>` | auto | K-mer size |
+| `-t <INT>` | 1 | Threads |
+| `-v, --verbose` | off | Print per-genome details in the run summary |
+
+```bash
 cedar dist genomes/ -o distances.tsv
+cedar dist --from-sketches sketches/ --confidence 0.99 -o distances.tsv
+cedar dist file1.fna file2.fna file3.fna
+cedar dist genomes/*.fna --no-rescue -o raw_distances.tsv
 ```
 
-`genomes/` should contain one FASTA file per genome (single-sequence FASTA;
-multi-FASTA input is rejected, split concatenated sequences per genome
-first).
+Both `-v/--verbose` and `-t/--threads` are global flags and can appear before or after the subcommand.
 
-## `cedar build`
+#### TSV output format
 
-Builds a Mash-distance neighbor-joining consensus tree.
+The output file begins with a metadata comment line followed by a tab-separated table:
 
 ```
-cedar build <DIR> [OPTIONS]
-
-Arguments:
-  <DIR>  Input directory containing FASTA files
-
-Options:
-  -o, --output <FILE>          Output tree (Newick) to FILE [default: stdout]
-  -B, --boot <INT>             Bootstrap replicates (conflicts with -J)
-  -J, --jack <INT>             Jackknife replicates (conflicts with -B)
-      --jacknife-prop <FLOAT>  Subsampling proportion for jackknife [default: 0.5]
-      --canonical              Use the canonical NJ solver instead of the
-                                default parallel (RapidBTrees) one
-      --include-div-pairs      If some genomes can only be connected via
-                                divergent (statistically unreliable) pairs,
-                                search for a smaller dataset-wide k-mer size
-                                that resolves them, rather than proceeding
-                                with a tree built partly on unreliable data
-  -s, --size <INT>             Sketch size [default: 1000]
-  -S, --seed <INT>             Hash seed [default: 42]
-  -k, --kmer <INT>             K-mer size [default: computed from mean
-                                genome size, targeting a 1% chance-collision
-                                probability, Fofanov et al., 2004]
+# confidence=0.95 rescue_pvalue=0.01
+genome1	genome2	jaccard	jaccard_ci_low	jaccard_ci_high	mash_distance	mash_distance_ci_low	mash_distance_ci_high	shared_hashes	total_hashes	relative_uncertainty	flag	kmer_size_used	rescued
 ```
 
-With neither `-B` nor `-J`, `cedar build` produces a single point-estimate
-tree from the raw distance matrix (no consensus/support values).
-
-Bootstrap and jackknife trees are built from a **majority-rule consensus**
-across replicates (a clade must appear in more than half the replicate
-trees), with each retained clade's support reported as the internal-node
-label in the output Newick, following the RAxML/IQ-TREE convention
-(`)95:0.0400`).
-
-### Connectivity checking and `--include-div-pairs`
-
-Before building the tree, `cedar build` checks whether the dataset's
-genomes can be connected using only statistically reliable pairwise
-distances. If not, if some genome (or cluster of genomes) can only reach
-the rest of the dataset through a pair flagged Unreliable or NoSharedHashes, it prints exactly which pair(s) are load-bearing for connectivity:
-
-```
-Warning: 1 divergent pair(s) are load-bearing for connectivity and will
-still be used in the tree (NJ requires a complete distance matrix, so these
-pairs can't simply be dropped). Treat branches resting on them with caution:
-  - genomeA vs genomeE
-Rerun with --include-div-pairs to attempt resolving them with a smaller
-k-mer size instead.
-```
-
-With `--include-div-pairs`, cedar searches for the smallest *dataset-wide*
-k-mer size (down to a floor set by the largest genome in the dataset, below
-which any apparent fix would just be k-mer-space exhaustion rather than
-real homology) that resolves the connectivity gap. The whole dataset is
-re-sketched at each candidate, not just the problem pairs, since Mash
-distance depends directly on k, and mixing k across a single distance
-matrix would break neighbor-joining's implicit assumption that every entry
-is comparable.
-
-## `cedar dist`
-
-Computes pairwise Mash distances annotated with an uncertainty estimate on
-each one, no tree is built. This is for the "is this pair a solid
-species-boundary call" moment (e.g. the ~95% ANI / ~0.05 Mash-distance
-species threshold), not for producing a phylogeny.
-
-```
-cedar dist <DIR> [OPTIONS]
-
-Arguments:
-  <DIR>  Input directory containing FASTA files
-
-Options:
-  -o, --output <FILE>  Output distance table (TSV) to FILE [default: stdout]
-  -s, --size <INT>     Sketch size [default: 1000]
-  -S, --seed <INT>     Hash seed [default: 42]
-  -k, --kmer <INT>     K-mer size [default: computed from mean genome size]
-```
-
-### Output columns
-
-| Column | Meaning |
+| Column | Description |
 |---|---|
-| `genome1`, `genome2` | Genome identifiers (basename, extension stripped) |
-| `jaccard` | Estimated Jaccard index |
-| `jaccard_ci_95_low` / `_high` | Exact 95% Clopper–Pearson CI on the Jaccard estimate |
-| `mash_distance` | Mash distance, `D = -(1/k)·ln(2J/(1+J))` |
-| `mash_distance_ci_95_low` / `_high` | The Jaccard CI transformed directly through the same formula (not a linear approximation) |
-| `shared_hashes`, `total_hashes` | Raw counts behind the Jaccard estimate |
-| `relative_uncertainty` | Relative half-width of the Jaccard CI — the quantity `flag` is actually classified on (not the distance's own CI, which compresses toward 0 for close relatives and would give a misleading signal) |
+| `jaccard` | Jaccard index estimate |
+| `jaccard_ci_low/high` | Exact Clopper–Pearson CI bounds on Jaccard |
+| `mash_distance` | Mash distance D = −(1/k) ln(2J/(1+J)) |
+| `mash_distance_ci_low/high` | CI bounds transformed through the same formula |
+| `relative_uncertainty` | CI half-width / Jaccard estimate (the quantity reliability is classified on) |
 | `flag` | `reliable` / `borderline` / `unreliable` / `no_shared_hashes` |
-| `kmer_size_used` | K-mer size these values were actually computed at |
-| `rescued` | Whether this pair's values came from the k-mer rescue mechanism rather than the run's default k |
+| `kmer_size_used` | The k-mer size actually used for this pair (may differ from the run k if rescued) |
+| `rescued` | `true` if this pair was resolved by the k-mer rescue mechanism |
 
-### Reliability classification
+#### Stderr summary
 
-| Flag | Relative CI half-width on Jaccard |
-|---|---|
-| `reliable` | ≤ 10% |
-| `borderline` | 10–30% |
-| `unreliable` | > 30% |
-| `no_shared_hashes` | zero shared hashes — no signal to estimate uncertainty from at all |
+A structured four-section report is always printed to stderr regardless of whether `-o` is given:
 
-### The rescue mechanism
+```
+================================================================
+ cedar dist - run summary
+================================================================
+ INPUT
+  genomes                 26
+  size range              4.6 Mb-5.5 Mb (mean 5.0 Mb)
+----------------------------------------------------------------
+ PARAMETERS
+  k-mer size              21 (auto, p=0.01, mean 5.0 Mb)
+  sketch size             1000
+  seed                    42
+  confidence              95%
+  rescue p-value          0.01
+----------------------------------------------------------------
+ DISTANCES
+  pairs computed          325
+  reliable                298
+  borderline              21
+  unreliable              6
+----------------------------------------------------------------
+ RESCUE
+  fixable (sketch)        4
+  unreliable => better    2
+  borderline => reliable  8
+  still unresolved        4
+----------------------------------------------------------------
+ OUTPUT
+  TSV                     distances.tsv
+================================================================
+```
 
-For any pair flagged `unreliable` or `no_shared_hashes`, cedar first checks
-whether a *larger sketch alone* (up to a ceiling) would bring it back to
-`borderline`, if so, it's left alone and reported as-is, since sketch size
-governs sampling precision, not whether real biological signal exists, and
-resketching the whole dataset larger is a decision for the user (`-s`), not
-something to do silently per-pair.
+### `cedar build`
 
-If a larger sketch wouldn't help, cedar re-sketches *only that pair's two
-genomes* at progressively smaller k-mer sizes (down to a floor based on the
-larger of the two genomes, below which chance k-mer matches become likely
-regardless of any real relationship). A candidate k is accepted only if it
-passes **both**:
+Build a neighbour-joining consensus tree with optional bootstrap or jackknife support.
 
-- relative CI half-width at or under the borderline threshold, and
-- Mash's own significance test (Ondov et al., Eq. 8): the observed sharing
-  must be statistically distinguishable from two unrelated random genomes
-  at that k, not merely numerically less noisy.
+```
+cedar build [OPTIONS] <PATH>...
+cedar build --from-sketches <DIR> [OPTIONS]
+```
 
-A rescued pair's row reports the k it was actually resolved at
-(`kmer_size_used`) and `rescued=true`, so it's clear that row isn't on the
-same k-mer scale as the rest of the table.
+| Option | Default | Description |
+|---|---|---|
+| `-o, --output <FILE>` | — | Output Newick tree |
+| `--from-sketches <DIR>` | — | Load pre-computed `.msh` files instead of re-sketching. Cannot be combined with `--include-div-pairs`. |
+| `-B, --boot <INT>` | — | Bootstrap replicates |
+| `-J, --jack <INT>` | — | Jackknife replicates |
+| `--jacknife-prop <FLOAT>` | 0.5 | Proportion of hashes to keep per jackknife replicate |
+| `--canonical` | off | Compute canonical NJ tree |
+| `--include-div-pairs` | off | If divergent pairs are structurally load-bearing, search for a smaller global k that resolves them |
+| `--confidence <FLOAT>` | 0.95 | Confidence level |
+| `--rescue-pvalue <FLOAT>` | 0.01 | Divergence significance threshold |
+| `-s, --size <INT>` | 1000 | Sketch size |
+| `-S, --seed <INT>` | 42 | Hash seed |
+| `-k, --kmer <INT>` | auto | K-mer size |
+| `-t <INT>` | 1 | Threads |
+| `-v, --verbose` | off | Verbose stderr summary |
+
+```bash
+cedar build genomes/ -B 100 -o tree.nwk
+cedar build --from-sketches sketches/ -B 1000 -o tree.nwk
+cedar build genomes/ --include-div-pairs -o tree.nwk
+cedar build genomes/ -J 100 --jacknife-prop 0.7 -o tree.nwk
+```
 
 ## Statistical methodology
 
-- **Jaccard confidence intervals**: exact Clopper–Pearson, computed via the
-  regularized incomplete beta function (treating the shared-hash count as
-  `Binomial(s, J)`, the same hypergeometric-to-binomial approximation Mash
-  itself uses), rather than a normal/Wald approximation.
-- **Mash distance confidence intervals**: the Jaccard CI's bounds
-  transformed *directly* through the Mash distance formula, not linearized
-  via the delta method.
-- **Significance testing**: Mash's own Eq. 8 (binomial P-value against an
-  expected chance-collision rate derived from each genome's size and the
-  k-mer size), reusing the same incomplete-beta machinery as the CI.
-- **Connectivity analysis**: Kruskal's algorithm over the complete pairwise
-  graph, with divergent pairs sentinel-weighted so resolvable edges are
-  always preferred — any divergent edge that ends up in the minimum
-  spanning tree is one the algorithm was structurally forced to use.
+### K-mer size selection
 
-Reference: Ondov, B.D., Treangen, T.J., Melsted, P. et al. *Mash: fast
-genome and metagenome distance estimation using MinHash.* Genome Biology
-17, 132 (2016). https://doi.org/10.1186/s13059-016-0997-x
+When `-k` is not specified, cedar computes the smallest k that limits the probability of any k-mer appearing by chance in a random genome of the observed mean size to ≤ 0.01 (Fofanov's formula, as used in the original Mash paper). This ensures the MinHash sketch captures real sequence signal rather than background noise.
 
-## Limitations
+### Confidence intervals (Clopper–Pearson)
 
-- `cedar build` does not perform per-pair k-mer rescue, only a
-  dataset-wide search via `--include-div-pairs`, since mixing k-mer sizes
-  within one distance matrix would violate neighbor-joining's assumption
-  that every entry is comparable. `cedar dist`'s per-pair rescue has no
-  such constraint, since it produces an unstructured table, not a tree.
-- Multi-FASTA input files are rejected; each genome must be a single-record
-  FASTA file.
-- Designed for species/strain-level resolution. Datasets requiring
-  divergent-pair rescue across most of a tree's backbone (rather than a
-  handful of edges) are likely outside what Mash-based distance estimation
-  can meaningfully resolve at all, regardless of k or sketch size.
+The Jaccard estimate `Ĵ = shared_hashes / total_hashes` is a sample proportion from a Binomial(s, J) model (the same approximation Mash uses). Cedar computes an exact Clopper–Pearson interval rather than a Wald approximation, using the relationship:
 
-## Development
-
-```bash
-cargo test          # requires committed fixtures under test/
-cargo clippy --all-targets -- -D warnings
-cargo fmt --all -- --check
+```
+P(X ≥ x | n, p) = I_p(x, n−x+1)
 ```
 
-### Licence
-`cedar` is distributed under the terms of the MIT license.
-See [LICENSE-MIT](https://github.com/Ebedthan/cedar/blob/main/LICENSE-MIT) for details.
+where I_p is the regularised incomplete beta function. This interval never under-covers (it is conservative rather than anti-conservative), and is implemented via `statrs::distribution::Beta::inverse_cdf`.
+
+The CI is computed on the Jaccard index, and both bounds are then transformed through D = −(1/k) ln(2J/(1+J)) to obtain CI bounds on the Mash distance. This avoids the approximation errors that would result from applying the delta method to D directly.
+
+### Reliability tiers
+
+A pair is classified by the relative CI half-width on J (half-width / Ĵ):
+
+| Tier | Threshold | Meaning |
+|---|---|---|
+| `reliable` | ≤ 10% | CI is tight relative to the point estimate; trustworthy |
+| `borderline` | ≤ 30% | Moderate uncertainty; usable with caution |
+| `unreliable` | > 30% | Wide interval; point estimate alone is not a reliable guide |
+| `no_shared_hashes` | — | No shared hashes at all; no signal to put an interval on |
+
+These thresholds apply independently of the `--confidence` level. Requesting a 99% interval widens the interval (making the comparison more stringent), correctly increasing the fraction of pairs classified as borderline or unreliable.
+
+### K-mer rescue mechanism
+
+When rescue is enabled (the default; disable with `--no-rescue`), cedar attempts to improve pairs whose reliability falls below their tier's target:
+
+- **Borderline** pairs target the *reliable* threshold (≤ 10%)
+- **Unreliable / no-shared-hashes** pairs target the *borderline* threshold (≤ 30%)
+
+Before attempting a k-mer search, cedar checks whether increasing the sketch size alone (up to 100,000 hashes) would already achieve the target — if so, it flags the pair as `fixable (sketch)` rather than attempting rescue, since sketch size governs sampling precision while k governs what sequence is captured.
+
+For pairs where a larger sketch would not help, cedar descends through candidate k-mer sizes (step 2, down to a genome-size-derived floor from Fofanov's formula) and re-sketches only that pair in a temporary directory at each candidate k. A candidate is accepted only if it passes **both** checks:
+
+1. Relative CI half-width ≤ target threshold
+2. Mash's own significance test (Eq. 8, P-value ≤ `--rescue-pvalue`): the observed sharing must be distinguishable from what two random unrelated genomes would share by chance
+
+Requiring both checks prevents accepting a rescue that simply reduced k until chance k-mer collisions started dominating the signal.
+
+### Connectivity analysis (`cedar build`)
+
+Before building a NJ tree, cedar runs Kruskal's algorithm over the complete pairwise graph to check whether any genome can only be reached via divergent (unreliable or non-significant) pairs. A divergent pair is structurally load-bearing if it ends up in the minimum spanning tree when resolvable pairs are exhausted first. This warns you before the tree is built rather than after, so you can decide whether to proceed or use `--include-div-pairs`.
+
+`--include-div-pairs` searches for a smaller dataset-wide k that resolves connectivity without divergent edges, re-sketching the entire dataset at each candidate. This is the most expensive operation in cedar: if load-bearing divergent pairs exist, expect this to take substantially longer than a standard `cedar build`.
+
+## Sketch reuse and `--from-sketches`
+
+Pre-computing sketches with `cedar sketch` and reusing them with `--from-sketches` is the recommended workflow for any scenario where:
+
+- The same genome set is compared at multiple confidence levels or k-mer sizes
+- Multiple benchmark or analysis runs are performed on the same data
+- Disk space is limited and raw FASTAs are deleted after sketching
+
+All sketches in a `--from-sketches` directory must have been created with the same `-s`, `-k`, and `-S` values. Cedar validates this at load time and reports a clear error if parameters are inconsistent.
+
+`--from-sketches` cannot be combined with `--include-div-pairs` on `cedar build`, because the global k-mer search requires re-sketching the entire dataset at candidate k values, which is impossible when the only available input is a fixed set of pre-computed sketches.
+
+## Output notes
+
+- All summaries and warnings are written to **stderr**. Only the TSV distance table (via `-o`) and the Newick tree (via `-o`) go to stdout or files.
+- The TSV metadata comment line (`# confidence=... rescue_pvalue=...`) can be skipped in most tools: `pandas.read_csv(..., comment='#')`, `awk 'NR>2'`, `grep -v '^#'`.
+- Genome size outliers (dramatically smaller or larger than the rest of the dataset) are flagged as warnings in the run summary. When k is auto-computed, this note indicates the outlier may have skewed the dataset-wide k selection; when k is user-specified, it is purely informational.
+
+## Dependencies
+
+| Crate | Version | Purpose |
+|---|---|---|
+| `clap` | 4 | CLI |
+| `finch` | — | MinHash sketching and `.msh` I/O |
+| `statrs` | 0.19 | Beta distribution (Clopper–Pearson CI) |
+| `rayon` | 1 | Parallelism |
+| `tempfile` | 3.10 | Temporary directories for rescue re-sketching |
+| `rand` | 0.10 | Bootstrap/jackknife sampling |
+| `anyhow` | — | Error handling |
+
+## Citing `cedar`
+
+Incoming `cedar` article. 
+
+But, if you use `cedar` in your work, please also cite:
+
+> Ondov, B.D. et al. (2016). Mash: fast genome and metagenome distance estimation using MinHash. *Genome Biology*, 17, 132.
+
+The distance computation and significance test are taken directly from that paper.
