@@ -184,7 +184,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let temp_dir_path = temp_dir.path();
 
-        let result = to_phylip(&dist, &temp_dir_path, true);
+        let result = to_phylip(&dist, temp_dir_path, true);
         assert!(result.is_ok());
 
         // Verify that the output file is created

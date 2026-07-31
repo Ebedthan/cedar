@@ -283,9 +283,7 @@ mod tests {
         common_hashes: u64,
         total_hashes: u64,
     ) -> SketchDistance {
-        let mash_distance = (-((2.0 * jaccard) / (1.0 + jaccard)).ln() / 21.0)
-            .max(0.0)
-            .min(1.0);
+        let mash_distance = (-((2.0 * jaccard) / (1.0 + jaccard)).ln() / 21.0).clamp(0.0, 1.0);
         SketchDistance {
             containment: jaccard,
             jaccard,
