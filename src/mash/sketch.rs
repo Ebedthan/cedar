@@ -259,9 +259,14 @@ mod tests {
         let result = create_sketches(&filenames, 21, 1000, 42, outdir).unwrap();
 
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0], format!("{}/bacam.fna.msh", outdir));
+
+        let expected = Path::new(outdir).join("bacam.fna.msh");
+        assert_eq!(Path::new(&result[0]), expected);
+
         assert!(
-            !result[0].contains("test/bacam.fna.msh"),
+            !Path::new(&result[0])
+                .components()
+                .any(|c| c.as_os_str() == "test"),
             "output path incorrectly nested the input directory: {}",
             result[0]
         );
